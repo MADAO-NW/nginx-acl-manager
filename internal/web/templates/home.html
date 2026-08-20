@@ -1,0 +1,28 @@
+{{define "home.html"}}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nginx ACL Manager</title>
+  <style>body { max-width: 60rem; margin: 3rem auto; padding: 0 1rem; font: 16px/1.5 system-ui, sans-serif; }</style>
+</head>
+<body>
+  <header>
+    <form method="post" action="/logout">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <button type="submit">退出登录</button>
+    </form>
+  </header>
+  <main>
+    <h1>Nginx ACL Manager</h1>
+    {{if .HasActiveProfile}}
+      <p>Nginx Profile 已配置。</p>
+    {{else}}
+      <p role="status">尚未应用正式 Nginx Profile，规则发布和恢复暂不可用。</p>
+    {{end}}
+    <p><a href="/settings/nginx">配置 Nginx</a></p>
+  </main>
+</body>
+</html>
+{{end}}

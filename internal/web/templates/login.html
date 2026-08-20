@@ -1,0 +1,29 @@
+{{define "login.html"}}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 · Nginx ACL Manager</title>
+  <style>
+    body { max-width: 28rem; margin: 5rem auto; padding: 0 1rem; font: 16px/1.5 system-ui, sans-serif; }
+    label { display: block; margin-top: 1rem; }
+    input { box-sizing: border-box; width: 100%; padding: .65rem; }
+    button { margin-top: 1.25rem; padding: .65rem 1rem; }
+    .error { color: #b42318; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>管理员登录</h1>
+    {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+    <form method="post" action="/login">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <label>用户名<input name="username" autocomplete="username" required></label>
+      <label>密码<input type="password" name="password" autocomplete="current-password" required></label>
+      <button type="submit">登录</button>
+    </form>
+  </main>
+</body>
+</html>
+{{end}}

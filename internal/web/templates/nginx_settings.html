@@ -1,0 +1,79 @@
+{{define "nginx_settings.html"}}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nginx 设置 · Nginx ACL Manager</title>
+  <style>
+    body { max-width: 68rem; margin: 2rem auto; padding: 0 1rem; font: 16px/1.5 system-ui, sans-serif; }
+    label { display: block; margin-top: 1rem; }
+    input[type=text] { box-sizing: border-box; width: 100%; padding: .6rem; font-family: ui-monospace, monospace; }
+    button { margin-top: 1rem; padding: .65rem 1rem; }
+    .error { color: #b42318; }
+    .message { color: #067647; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ddd; padding: .5rem; text-align: left; }
+    code { overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <nav><a href="/">返回项目列表</a></nav>
+  <main>
+    <h1>Nginx 设置</h1>
+    <p>登录管理员可修改候选值；正式 Profile 只会由固定 root 服务在强校验成功后替换。</p>
+    {{if .Message}}<p class="message" role="status">{{.Message}}</p>{{end}}
+    {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+
+    <h2>正式 Profile</h2>
+    {{if .HasActive}}
+      <table>
+        <tr><th>二进制</th><td><code>{{.Active.BinaryPath}}</code></td></tr>
+        <tr><th>主配置</th><td><code>{{.Active.ConfigPath}}</code></td></tr>
+        <tr><th>Prefix</th><td><code>{{.Active.PrefixPath}}</code></td></tr>
+        <tr><th>Service</th><td><code>{{.Active.ServiceName}}</code></td></tr>
+        <tr><th>HTTP include</th><td><code>{{.Active.HTTPIncludeFile}}</code></td></tr>
+        <tr><th>Real IP snippet</th><td><code>{{.Active.RealIPSnippetPath}}</code></td></tr>
+      </table>
+    {{else}}
+      <p>尚未应用正式 Profile。</p>
+    {{end}}
+
+    <h2>候选 Profile</h2>
+    <form method="post" action="/settings/nginx">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <label>Nginx 二进制绝对路径
+        <input type="text" name="binaryPath" value="{{.Candidate.BinaryPath}}" required>
+        {{with index .FieldErrors "binaryPath"}}<span class="error">{{.}}</span>{{end}}
+      </label>
+      <label>主配置绝对路径
+        <input type="text" name="configPath" value="{{.Candidate.ConfigPath}}" required>
+        {{with index .FieldErrors "configPath"}}<span class="error">{{.}}</span>{{end}}
+      </label>
+      <label>Prefix 绝对路径（可选）
+        <input type="text" name="prefixPath" value="{{.Candidate.PrefixPath}}">
+        {{with index .FieldErrors "prefixPath"}}<span class="error">{{.}}</span>{{end}}
+      </label>
+      <label>systemd service
+        <input type="text" name="serviceName" value="{{.Candidate.ServiceName}}" required>
+        {{with index .FieldErrors "serviceName"}}<span class="error">{{.}}</span>{{end}}
+      </label>
+      <label>HTTP 全局入口文件
+        <input type="text" name="httpIncludeFile" value="{{.Candidate.HTTPIncludeFile}}" required>
+        {{with index .FieldErrors "httpIncludeFile"}}<span class="error">{{.}}</span>{{end}}
+      </label>
+      <label>Cloudflare real IP snippet
+        <input type="text" name="realIpSnippetPath" value="{{.Candidate.RealIPSnippetPath}}" required>
+        {{with index .FieldErrors "realIpSnippetPath"}}<span class="error">{{.}}</span>{{end}}
+      </label>
+      <button type="submit">保存草稿</button>
+    </form>
+
+    <form method="post" action="/settings/nginx/apply">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <button type="submit">验证并应用</button>
+    </form>
+  </main>
+</body>
+</html>
+{{end}}
