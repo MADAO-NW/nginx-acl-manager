@@ -105,3 +105,39 @@ func TestLoadCredentialsStrictJSON(t *testing.T) {
 		t.Fatal("LoadCredentials(unknown field) error = nil")
 	}
 }
+
+func TestSaveCredentials(t *testing.T) {
+	t.Parallel()
+
+	encoded, err := HashPassword("correct horse battery staple")
+	if err != nil {
+		t.Fatalf("HashPassword() error = %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "auth.json")
+	if err := SaveCredentials(path, Credentials{Username: "admin", PasswordHash: encoded}); err != nil {
+		t.Fatalf("SaveCredentials() error = %v", err)
+	}
+	credentials, err := LoadCredentials(path)
+	if err != nil {
+		t.Fatalf("LoadCredentials() error = %v", err)
+	}
+	if credentials.Username != "admin" {
+		t.Fatalf("Username = %q", credentials.Username)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+	if err := SaveCredentials(path, credentials); err != nil {
+		t.Fatalf("SaveCredentials(existing) error = %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %o", info.Mode().Perm())
+	}
+	if err := SaveCredentials(path, Credentials{Username: "", PasswordHash: encoded}); err == nil {
+		t.Fatal("SaveCredentials(invalid) error = nil")
+	}
+}

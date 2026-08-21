@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"unicode/utf8"
 
 	"golang.org/x/crypto/argon2"
@@ -92,6 +94,82 @@ func LoadCredentials(path string) (Credentials, error) {
 		return Credentials{}, err
 	}
 	return credentials, nil
+}
+
+// SaveCredentials 校验单管理员凭据并在目标目录内原子替换认证文件。
+func SaveCredentials(path string, credentials Credentials) error {
+	if path == "" {
+		return errors.New("管理员凭据路径不能为空")
+	}
+	if err := validateUsername(credentials.Username); err != nil {
+		return err
+	}
+	if _, _, err := parsePasswordHash(credentials.PasswordHash); err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(credentials, "", "  ")
+	if err != nil {
+		return fmt.Errorf("序列化管理员凭据: %w", err)
+	}
+	data = append(data, '\n')
+
+	dir := filepath.Dir(path)
+	mode := os.FileMode(0o640)
+	ownerUID, ownerGID := -1, -1
+	if info, statErr := os.Stat(path); statErr == nil {
+		mode = info.Mode().Perm()
+		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+			ownerUID = int(stat.Uid)
+			ownerGID = int(stat.Gid)
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("检查现有管理员凭据: %w", statErr)
+	}
+	tmp, err := os.CreateTemp(dir, ".auth-*.tmp")
+	if err != nil {
+		return fmt.Errorf("创建管理员凭据临时文件: %w", err)
+	}
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		_ = tmp.Close()
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if err := tmp.Chmod(mode); err != nil {
+		return fmt.Errorf("设置管理员凭据权限: %w", err)
+	}
+	if ownerUID >= 0 && ownerGID >= 0 {
+		if err := tmp.Chown(ownerUID, ownerGID); err != nil {
+			return fmt.Errorf("保留管理员凭据所有者: %w", err)
+		}
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return fmt.Errorf("写入管理员凭据: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("同步管理员凭据: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("关闭管理员凭据: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("替换管理员凭据: %w", err)
+	}
+	committed = true
+
+	dirHandle, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("打开管理员凭据目录: %w", err)
+	}
+	defer dirHandle.Close()
+	if err := dirHandle.Sync(); err != nil {
+		return fmt.Errorf("同步管理员凭据目录: %w", err)
+	}
+	return nil
 }
 
 // LoadVerifier 从固定认证文件加载可直接注入 Web 服务的验证器。

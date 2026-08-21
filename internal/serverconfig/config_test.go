@@ -54,3 +54,35 @@ func TestValidatePort(t *testing.T) {
 		}
 	}
 }
+
+func TestSaveConfig(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := Save(path, Config{ListenPort: 17582}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	config, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if config.ListenPort != 17582 {
+		t.Fatalf("ListenPort = %d", config.ListenPort)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+	if err := Save(path, Config{ListenPort: 7582}); err != nil {
+		t.Fatalf("Save(existing) error = %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %o", info.Mode().Perm())
+	}
+	if err := Save(path, Config{ListenPort: 0}); err == nil {
+		t.Fatal("Save(invalid) error = nil")
+	}
+}

@@ -8,7 +8,9 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
+	"syscall"
 )
 
 const (
@@ -52,6 +54,79 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 	return config, nil
+}
+
+// Save 校验配置并在目标目录内原子替换配置文件。
+func Save(path string, config Config) error {
+	if err := config.Validate(); err != nil {
+		return err
+	}
+	if path == "" {
+		return errors.New("服务配置路径不能为空")
+	}
+
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("序列化服务配置: %w", err)
+	}
+	data = append(data, '\n')
+
+	dir := filepath.Dir(path)
+	mode := os.FileMode(0o640)
+	ownerUID, ownerGID := -1, -1
+	if info, statErr := os.Stat(path); statErr == nil {
+		mode = info.Mode().Perm()
+		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+			ownerUID = int(stat.Uid)
+			ownerGID = int(stat.Gid)
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("检查现有服务配置: %w", statErr)
+	}
+	tmp, err := os.CreateTemp(dir, ".config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("创建服务配置临时文件: %w", err)
+	}
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		_ = tmp.Close()
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if err := tmp.Chmod(mode); err != nil {
+		return fmt.Errorf("设置服务配置权限: %w", err)
+	}
+	if ownerUID >= 0 && ownerGID >= 0 {
+		if err := tmp.Chown(ownerUID, ownerGID); err != nil {
+			return fmt.Errorf("保留服务配置所有者: %w", err)
+		}
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return fmt.Errorf("写入服务配置: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("同步服务配置: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("关闭服务配置: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("替换服务配置: %w", err)
+	}
+	committed = true
+
+	dirHandle, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("打开服务配置目录: %w", err)
+	}
+	defer dirHandle.Close()
+	if err := dirHandle.Sync(); err != nil {
+		return fmt.Errorf("同步服务配置目录: %w", err)
+	}
+	return nil
 }
 
 // Validate 校验 TCP 端口范围。
