@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
 // ErrNotFound 表示候选或正式 Profile 尚未创建。
@@ -88,6 +89,70 @@ func (s Store) SaveCandidate(profile Profile) error {
 		return fmt.Errorf("同步候选 Profile 目录: %w", err)
 	}
 	return nil
+}
+
+// SaveActive 由 root apply 在全部校验和 reload 成功后原子替换正式 Profile。
+func (s Store) SaveActive(profile Profile) error {
+	if err := ValidateCandidate(profile); err != nil {
+		return err
+	}
+	if s.ActivePath == "" {
+		return errors.New("正式 Profile 路径未配置")
+	}
+	data, err := json.MarshalIndent(profile, "", "  ")
+	if err != nil {
+		return fmt.Errorf("序列化正式 Profile: %w", err)
+	}
+	data = append(data, '\n')
+	return writeAtomic(s.ActivePath, data, 0o640)
+}
+
+func writeAtomic(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return fmt.Errorf("创建 Profile 目录: %w", err)
+	}
+	tmp, err := os.CreateTemp(dir, ".nginx-profile-*.tmp")
+	if err != nil {
+		return fmt.Errorf("创建 Profile 临时文件: %w", err)
+	}
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		_ = tmp.Close()
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(mode); err != nil {
+		return err
+	}
+	if directoryInfo, statErr := os.Stat(dir); statErr == nil {
+		if stat, ok := directoryInfo.Sys().(*syscall.Stat_t); ok {
+			if err := tmp.Chown(-1, int(stat.Gid)); err != nil {
+				return fmt.Errorf("设置正式 Profile 文件组: %w", err)
+			}
+		}
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	committed = true
+	handle, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer handle.Close()
+	return handle.Sync()
 }
 
 func load(path string) (Profile, error) {

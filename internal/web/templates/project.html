@@ -1,0 +1,44 @@
+{{define "project.html"}}
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Project.DisplayName}} · Nginx ACL Manager</title>
+<style>
+body{max-width:76rem;margin:2rem auto;padding:0 1rem;font:16px/1.5 system-ui,sans-serif}fieldset{margin:1.2rem 0;padding:1rem}label{display:block;margin:.45rem 0}input,select{padding:.4rem}button{margin:.25rem;padding:.45rem .7rem}.row{display:flex;gap:.7rem;flex-wrap:wrap;align-items:end}.inline{display:inline}.message{color:#067647}.error{color:#b42318}code{overflow-wrap:anywhere}.danger{color:#b42318}
+</style></head><body>
+<nav><a href="/">返回项目列表</a> · <a href="/settings/nginx">Nginx 设置</a></nav>
+<main><h1>{{.Project.DisplayName}}</h1><p><code>{{.Project.Slug}}</code>{{if .CurrentRevision}} · 当前发布 <code>{{.CurrentRevision}}</code>{{end}}</p>
+{{if .Message}}<p class="message" role="status">{{.Message}}</p>{{end}}{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+{{with .PublishResult}}<p class="{{if .Success}}message{{else}}error{{end}}">最近发布结果：{{.Message}}{{if .Revision}}（<code>{{.Revision}}</code>）{{end}}</p>{{end}}
+<form method="post" action="/projects/{{.Project.Slug}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><label>项目名称 <input name="displayName" value="{{.Project.DisplayName}}" required></label><button>保存项目名称</button></form>
+
+<h2>实例</h2>
+{{range .Project.Instances}}
+{{$instance := .}}
+<fieldset><legend><strong>{{.DisplayName}}</strong> <code>{{.Key}}</code></legend>
+<form method="post" action="/projects/{{$.Project.Slug}}/instances/{{.Key}}">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><div class="row">
+<label>名称 <input name="displayName" value="{{.DisplayName}}" required></label><label><input type="checkbox" name="enabled" {{if .Enabled}}checked{{end}}> 启用实例</label>
+<label>本地端口 <input type="number" name="localPort" min="1" max="65535" value="{{.LocalPort}}" required></label><label>入口域名 <input name="serverName" value="{{.ServerName}}"></label>
+<label>拒绝状态 <select name="denyStatus"><option value="403" {{if eq .DenyStatus 403}}selected{{end}}>403</option><option value="404" {{if eq .DenyStatus 404}}selected{{end}}>404</option></select></label></div>
+<button>保存实例</button></form>
+<p>业务 location 接入：<code>include /etc/nginx/access-control/current/projects/{{$.Project.Slug}}/instances/{{.Key}}/location/*.conf;</code></p>
+
+<h3>白名单</h3>
+{{range .AllowedCIDRs}}<form method="post" action="/projects/{{$.Project.Slug}}/instances/{{$instance.Key}}/allowlist/{{.ID}}" class="row">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><label>IP/CIDR <input name="cidr" value="{{.CIDR}}" required></label><label>说明 <input name="label" value="{{.Label}}"></label><button>保存</button><button class="danger" name="action" value="delete">删除</button></form>{{else}}<p>白名单为空。</p>{{end}}
+<form method="post" action="/projects/{{$.Project.Slug}}/instances/{{.Key}}/allowlist" class="row"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><label>新增 IP/CIDR <input name="cidr" required></label><label>说明 <input name="label"></label><button>添加白名单</button></form>
+
+<h3>受保护接口规则</h3>
+{{range .Rules}}<form method="post" action="/projects/{{$.Project.Slug}}/instances/{{$instance.Key}}/rules/{{.ID}}">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><div class="row"><label>名称 <input name="name" value="{{.Name}}" required></label>
+<label><input type="checkbox" name="methods" value="GET" {{if hasMethod .Methods "GET"}}checked{{end}}>GET</label><label><input type="checkbox" name="methods" value="HEAD" {{if hasMethod .Methods "HEAD"}}checked{{end}}>HEAD</label><label><input type="checkbox" name="methods" value="POST" {{if hasMethod .Methods "POST"}}checked{{end}}>POST</label><label><input type="checkbox" name="methods" value="PUT" {{if hasMethod .Methods "PUT"}}checked{{end}}>PUT</label><label><input type="checkbox" name="methods" value="PATCH" {{if hasMethod .Methods "PATCH"}}checked{{end}}>PATCH</label><label><input type="checkbox" name="methods" value="DELETE" {{if hasMethod .Methods "DELETE"}}checked{{end}}>DELETE</label><label><input type="checkbox" name="methods" value="OPTIONS" {{if hasMethod .Methods "OPTIONS"}}checked{{end}}>OPTIONS</label>
+<label>路径类型 <select name="pathType"><option value="exact" {{if eq .Path.Type "exact"}}selected{{end}}>exact</option><option value="numeric_segment" {{if eq .Path.Type "numeric_segment"}}selected{{end}}>numeric_segment</option></select></label><label>路径 <input name="pathValue" value="{{.Path.Value}}" required></label><label><input type="checkbox" name="optionalTrailingSlash" {{if .Path.OptionalTrailingSlash}}checked{{end}}> 可选尾部 /</label></div>
+<span>状态：{{if .Enabled}}启用{{else}}停用{{end}}</span><button>保存</button>{{if .Enabled}}<button name="action" value="disable">停用</button>{{else}}<button name="action" value="enable">启用</button>{{end}}<button class="danger" name="action" value="delete">删除</button></form>{{else}}<p>尚无规则。</p>{{end}}
+<form method="post" action="/projects/{{$.Project.Slug}}/instances/{{.Key}}/rules"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><div class="row"><label>新规则名称 <input name="name" required></label><label><input type="checkbox" name="methods" value="GET">GET</label><label><input type="checkbox" name="methods" value="HEAD">HEAD</label><label><input type="checkbox" name="methods" value="POST">POST</label><label><input type="checkbox" name="methods" value="PUT">PUT</label><label><input type="checkbox" name="methods" value="PATCH">PATCH</label><label><input type="checkbox" name="methods" value="DELETE">DELETE</label><label><input type="checkbox" name="methods" value="OPTIONS">OPTIONS</label><label>类型 <select name="pathType"><option value="exact">exact</option><option value="numeric_segment">numeric_segment</option></select></label><label>路径 <input name="pathValue" required></label><label><input type="checkbox" name="optionalTrailingSlash"> 可选尾部 /</label></div><button>新增停用规则</button></form>
+</fieldset>{{else}}<p>尚无实例。</p>{{end}}
+
+<h3>新增实例</h3><form method="post" action="/projects/{{.Project.Slug}}/instances"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><div class="row"><label>稳定标识 <input name="key" pattern="[a-z][a-z0-9-]*" required></label><label>名称 <input name="displayName" required></label><label><input type="checkbox" name="enabled"> 启用</label><label>本地端口 <input type="number" name="localPort" min="1" max="65535" required></label><label>入口域名 <input name="serverName"></label><label>拒绝状态 <select name="denyStatus"><option>403</option><option>404</option></select></label></div><button>新增实例</button></form>
+
+<h2>预览、发布与恢复</h2><form class="inline" method="post" action="/projects/{{.Project.Slug}}/preview"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button>预览配置与差异</button></form><form class="inline" method="post" action="/projects/{{.Project.Slug}}/publish"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button>发布当前草稿</button></form>
+<h3>历史版本</h3>{{if .History}}<table><thead><tr><th>版本</th><th>时间</th><th>动作</th><th></th></tr></thead><tbody>{{range .History}}<tr><td><code>{{.Revision}}</code></td><td>{{.CreatedAt}}</td><td>{{.Action}}</td><td><form method="post" action="/projects/{{$.Project.Slug}}/restore/{{.Revision}}"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><button>以此项目快照创建新版本</button></form></td></tr>{{end}}</tbody></table>{{else}}<p>尚无包含本项目的发布历史。</p>{{end}}
+</main></body></html>{{end}}

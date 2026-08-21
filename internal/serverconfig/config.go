@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	// ListenAddress 是管理页面固定绑定的回环地址。
-	ListenAddress = "127.0.0.1"
+	// ListenAddress 是管理页面固定绑定的所有 IPv4 网卡地址。
+	ListenAddress = "0.0.0.0"
 	// DefaultPort 是未覆盖安装端口时使用的固定值。
 	DefaultPort = 7582
 )
@@ -137,7 +137,7 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// ListenAddressWithPort 返回 net/http 使用的固定回环监听地址。
+// ListenAddressWithPort 返回 net/http 使用的固定监听地址。
 func (c Config) ListenAddressWithPort() (string, error) {
 	if err := c.Validate(); err != nil {
 		return "", err

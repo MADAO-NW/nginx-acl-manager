@@ -17,7 +17,7 @@ func TestDefaultAndListenAddress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListenAddressWithPort() error = %v", err)
 	}
-	if address != "127.0.0.1:7582" {
+	if address != "0.0.0.0:7582" {
 		t.Fatalf("address = %q", address)
 	}
 }

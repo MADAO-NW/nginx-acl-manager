@@ -10,9 +10,13 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"sync"
 
 	"nginx-acl-manager/internal/auth"
+	"nginx-acl-manager/internal/draft"
+	"nginx-acl-manager/internal/model"
 	"nginx-acl-manager/internal/nginxprofile"
+	"nginx-acl-manager/internal/release"
 )
 
 const (
@@ -44,27 +48,34 @@ type ApplyTrigger interface {
 
 // Options 定义 Web 处理器的必要依赖。
 type Options struct {
-	Verifier         CredentialVerifier
-	Sessions         *auth.SessionStore
-	Profiles         ProfileRepository
-	ApplyTrigger     ApplyTrigger
-	DefaultCandidate nginxprofile.Profile
-	AllowedHost      string
-	SecureCookies    bool
-	Logger           *slog.Logger
+	Verifier          CredentialVerifier
+	Sessions          *auth.SessionStore
+	Profiles          ProfileRepository
+	ApplyTrigger      ApplyTrigger
+	PublishTrigger    ApplyTrigger
+	Drafts            draft.Store
+	Releases          release.Store
+	ProfileResultPath string
+	DefaultCandidate  nginxprofile.Profile
+	SecureCookies     bool
+	Logger            *slog.Logger
 }
 
 type server struct {
-	verifier         CredentialVerifier
-	sessions         *auth.SessionStore
-	profiles         ProfileRepository
-	applyTrigger     ApplyTrigger
-	defaultCandidate nginxprofile.Profile
-	allowedHost      string
-	secureCookies    bool
-	logger           *slog.Logger
-	templates        *template.Template
-	mux              *http.ServeMux
+	verifier          CredentialVerifier
+	sessions          *auth.SessionStore
+	profiles          ProfileRepository
+	applyTrigger      ApplyTrigger
+	publishTrigger    ApplyTrigger
+	drafts            draft.Store
+	releases          release.Store
+	profileResultPath string
+	defaultCandidate  nginxprofile.Profile
+	secureCookies     bool
+	logger            *slog.Logger
+	templates         *template.Template
+	mux               *http.ServeMux
+	publishMu         sync.Mutex
 }
 
 type loginPageData struct {
@@ -75,6 +86,9 @@ type loginPageData struct {
 type homePageData struct {
 	CSRFToken        string
 	HasActiveProfile bool
+	Projects         []model.Project
+	CurrentRevision  string
+	Message          string
 }
 
 type settingsPageData struct {
@@ -93,7 +107,7 @@ func NewHandler(options Options) (http.Handler, error) {
 		return nil, errors.New("Web 处理器依赖不完整")
 	}
 
-	templates, err := template.ParseFS(templateFiles, "templates/*.html")
+	templates, err := template.New("").Funcs(template.FuncMap{"hasMethod": methodChecked}).ParseFS(templateFiles, "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
@@ -103,16 +117,19 @@ func NewHandler(options Options) (http.Handler, error) {
 	}
 
 	s := &server{
-		verifier:         options.Verifier,
-		sessions:         options.Sessions,
-		profiles:         options.Profiles,
-		applyTrigger:     options.ApplyTrigger,
-		defaultCandidate: options.DefaultCandidate,
-		allowedHost:      options.AllowedHost,
-		secureCookies:    options.SecureCookies,
-		logger:           logger,
-		templates:        templates,
-		mux:              http.NewServeMux(),
+		verifier:          options.Verifier,
+		sessions:          options.Sessions,
+		profiles:          options.Profiles,
+		applyTrigger:      options.ApplyTrigger,
+		publishTrigger:    options.PublishTrigger,
+		drafts:            options.Drafts,
+		releases:          options.Releases,
+		profileResultPath: options.ProfileResultPath,
+		defaultCandidate:  options.DefaultCandidate,
+		secureCookies:     options.SecureCookies,
+		logger:            logger,
+		templates:         templates,
+		mux:               http.NewServeMux(),
 	}
 
 	s.mux.HandleFunc("GET /login", s.handleLoginPage)
@@ -122,15 +139,25 @@ func NewHandler(options Options) (http.Handler, error) {
 	s.mux.HandleFunc("GET /settings/nginx", s.requireSession(false, s.handleNginxSettings))
 	s.mux.HandleFunc("POST /settings/nginx", s.requireSession(true, s.handleSaveNginxSettings))
 	s.mux.HandleFunc("POST /settings/nginx/apply", s.requireSession(true, s.handleApplyNginxSettings))
+	if s.drafts.Directory != "" && s.releases.AccessControlRoot != "" {
+		s.mux.HandleFunc("POST /projects", s.requireSession(true, s.handleCreateProject))
+		s.mux.HandleFunc("GET /projects/{slug}", s.requireSession(false, s.handleProject))
+		s.mux.HandleFunc("POST /projects/{slug}", s.requireSession(true, s.handleUpdateProject))
+		s.mux.HandleFunc("POST /projects/{slug}/instances", s.requireSession(true, s.handleCreateInstance))
+		s.mux.HandleFunc("POST /projects/{slug}/instances/{key}", s.requireSession(true, s.handleUpdateInstance))
+		s.mux.HandleFunc("POST /projects/{slug}/instances/{key}/allowlist", s.requireSession(true, s.handleCreateAllowlist))
+		s.mux.HandleFunc("POST /projects/{slug}/instances/{key}/allowlist/{id}", s.requireSession(true, s.handleUpdateAllowlist))
+		s.mux.HandleFunc("POST /projects/{slug}/instances/{key}/rules", s.requireSession(true, s.handleCreateRule))
+		s.mux.HandleFunc("POST /projects/{slug}/instances/{key}/rules/{id}", s.requireSession(true, s.handleUpdateRule))
+		s.mux.HandleFunc("POST /projects/{slug}/preview", s.requireSession(true, s.handlePreviewProject))
+		s.mux.HandleFunc("POST /projects/{slug}/publish", s.requireSession(true, s.handlePublishProject))
+		s.mux.HandleFunc("POST /projects/{slug}/restore/{revision}", s.requireSession(true, s.handleRestoreProject))
+	}
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
 	return s, nil
 }
 
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if s.allowedHost != "" && r.Host != s.allowedHost {
-		http.Error(w, "请求 Host 不受信任", http.StatusBadRequest)
-		return
-	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'")
 	w.Header().Set("Referrer-Policy", "no-referrer")
@@ -197,9 +224,31 @@ func (s *server) handleHome(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "暂时无法读取 Nginx 状态", http.StatusInternalServerError)
 		return
 	}
+	projects := []model.Project{}
+	if s.drafts.Directory != "" {
+		projects, err = s.drafts.List()
+		if err != nil {
+			s.logger.Error("读取项目草稿失败", "error", err)
+			http.Error(w, "暂时无法读取项目", http.StatusInternalServerError)
+			return
+		}
+	}
+	currentRevision := ""
+	if s.releases.AccessControlRoot != "" {
+		if revision, revisionErr := s.releases.CurrentRevision(); revisionErr == nil {
+			currentRevision = revision
+		}
+	}
+	message := ""
+	if r.URL.Query().Get("created") == "1" {
+		message = "项目草稿已创建"
+	}
 	s.render(w, http.StatusOK, "home.html", homePageData{
 		CSRFToken:        csrfToken,
 		HasActiveProfile: hasActive,
+		Projects:         projects,
+		CurrentRevision:  currentRevision,
+		Message:          message,
 	})
 }
 
@@ -216,6 +265,9 @@ func (s *server) handleNginxSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Query().Get("apply") == "1" {
 		data.Message = "已触发 root 验证与应用，请刷新页面查看正式 Profile"
+	}
+	if result, resultErr := nginxprofile.LoadApplyResult(s.profileResultPath); resultErr == nil {
+		data.Message = result.Message
 	}
 	s.render(w, http.StatusOK, "nginx_settings.html", data)
 }

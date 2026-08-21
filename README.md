@@ -1,19 +1,23 @@
 # nginx-acl-manager
 
-单机 Nginx URL 访问控制管理工具。项目采用 Go 单二进制、服务端渲染页面和 systemd 部署，管理页面固定监听回环地址，默认端口为 `7582`。
+单机 Nginx URL 访问控制管理工具。项目采用 Go 单二进制、服务端渲染页面和 systemd 部署，管理页面默认监听 `0.0.0.0:7582`。
 
 ## 当前实现状态
 
 当前版本已经包含：
 
 - 单管理员 Argon2id 凭据初始化与登录；
-- 内存 Session、CSRF 和 Host 校验；
+- 内存 Session 和 CSRF 校验；
 - 管理端口配置；
-- Nginx Profile 候选配置页面、结构校验和原子保存；
+- Nginx Profile 候选配置、root 强校验、原子应用和失败回退；
+- 项目、实例、白名单和 URL 规则草稿管理；
+- 确定性 Nginx 配置生成、发布预览和相对当前版本的差异；
+- root release 发布、`nginx -T` 接入校验、reload 失败回切和未完成事务恢复；
+- 不可变发布历史和项目级历史恢复；
 - Linux `amd64/arm64` GitHub Release 自动构建；
-- 一键安装、升级、指定版本升级/回退和卸载脚本。
+- 一键安装、升级、指定版本升级/回退和卸载脚本，以及非 root Web/root oneshot/sudoers 权限边界。
 
-规则管理、root Profile apply、Nginx 配置发布与历史恢复仍按[技术方案](./技术方案.md)继续实现。当前页面可以登录并维护候选 Nginx Profile，但“验证并应用”尚不可用。
+详细的数据语义、接入步骤和失败回退规则见[技术方案](./技术方案.md)。
 
 ## 一键安装
 
@@ -31,15 +35,10 @@ curl -fsSL https://raw.githubusercontent.com/MADAO-NW/nginx-acl-manager/main/dep
 4. 创建专用非 root 系统用户、配置目录和数据目录；
 5. 通过本机 TTY 设置唯一管理员用户名和密码；
 6. 探测 Nginx 路径并保存候选 Profile；
-7. 注册并启动 `nginx-acl-manager.service`。
+7. 注册 Web、Profile apply、publish、recover systemd unit 和精确 sudoers；
+8. 启动 `nginx-acl-manager.service`。
 
-服务只监听 `127.0.0.1:7582`，不会开放防火墙。远程访问时使用 SSH 隧道：
-
-```bash
-ssh -L 7582:127.0.0.1:7582 <user>@<server>
-```
-
-然后访问 `http://127.0.0.1:7582`。
+服务默认监听 `0.0.0.0:7582`，安装脚本不会开放防火墙。请按实际部署通过防火墙限制来源；需要公网访问时，建议在服务前配置 HTTPS 反向代理，避免管理员凭据和 Session 通过明文 HTTP 传输。
 
 ### 安装参数
 
@@ -64,6 +63,8 @@ curl -fsSL https://raw.githubusercontent.com/MADAO-NW/nginx-acl-manager/main/dep
 ```
 
 这些参数只用于预填候选 Profile，不会绕过 Web 登录和后续 root 强校验，也不会在安装阶段修改现有 Nginx 配置。
+
+首次登录后需要进入“Nginx 设置”，确认候选路径并执行“验证并应用”。Profile apply 只接管带管理器标记的全局入口文件；已有同名非管理文件会被拒绝。随后为每个启用实例把项目页展示的稳定 `location` include 加入对应业务 Nginx `location`，即可在页面预览并发布规则。
 
 ### 维护命令
 

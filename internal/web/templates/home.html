@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Nginx ACL Manager</title>
-  <style>body { max-width: 60rem; margin: 3rem auto; padding: 0 1rem; font: 16px/1.5 system-ui, sans-serif; }</style>
+  <style>body { max-width: 68rem; margin: 3rem auto; padding: 0 1rem; font: 16px/1.5 system-ui, sans-serif; } label { display:block; margin:.6rem 0; } input { padding:.45rem; } .message { color:#067647; }</style>
 </head>
 <body>
   <header>
@@ -16,12 +16,25 @@
   </header>
   <main>
     <h1>Nginx ACL Manager</h1>
+    {{if .Message}}<p class="message">{{.Message}}</p>{{end}}
     {{if .HasActiveProfile}}
       <p>Nginx Profile 已配置。</p>
     {{else}}
       <p role="status">尚未应用正式 Nginx Profile，规则发布和恢复暂不可用。</p>
     {{end}}
     <p><a href="/settings/nginx">配置 Nginx</a></p>
+    {{if .CurrentRevision}}<p>当前发布：<code>{{.CurrentRevision}}</code></p>{{end}}
+    <h2>项目</h2>
+    {{if .Projects}}
+      <ul>{{range .Projects}}<li><a href="/projects/{{.Slug}}">{{.DisplayName}}</a> <code>{{.Slug}}</code></li>{{end}}</ul>
+    {{else}}<p>尚无项目草稿。</p>{{end}}
+    <h3>新建项目</h3>
+    <form method="post" action="/projects">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <label>项目标识 <input name="slug" pattern="[a-z][a-z0-9-]*" required></label>
+      <label>项目名称 <input name="displayName" required></label>
+      <button type="submit">创建草稿</button>
+    </form>
   </main>
 </body>
 </html>

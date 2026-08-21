@@ -12,6 +12,10 @@ CONFIG_PATH="${CONFIG_DIR}/config.json"
 AUTH_PATH="${CONFIG_DIR}/auth.json"
 CANDIDATE_PATH="${DATA_DIR}/staging/nginx-profile-candidate.json"
 UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
+PROFILE_APPLY_UNIT_PATH="/etc/systemd/system/nginx-acl-manager-profile-apply.service"
+PUBLISH_UNIT_PATH="/etc/systemd/system/nginx-acl-manager-publish.service"
+RECOVER_UNIT_PATH="/etc/systemd/system/nginx-acl-manager-recover.service"
+SUDOERS_PATH="/etc/sudoers.d/nginx-acl-manager"
 
 ACTION="install"
 REQUESTED_VERSION=""
@@ -240,10 +244,14 @@ ensure_service_user_and_directories() {
     install -d -m 0750 -o root -g "$SERVICE_USER" "$CONFIG_DIR"
     install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" "$DATA_DIR"
     install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" "${DATA_DIR}/staging"
+    install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" "${DATA_DIR}/drafts/projects"
+    install -d -m 0750 -o root -g "$SERVICE_USER" "${DATA_DIR}/results"
+    install -d -m 0755 -o root -g root "/etc/nginx/access-control/releases"
 }
 
 write_service_unit() {
     cat >"$UNIT_PATH" <<EOF
+# managed-by: nginx-acl-manager
 [Unit]
 Description=Nginx ACL Manager
 After=network.target
@@ -256,12 +264,10 @@ ExecStart=${BINARY_PATH} serve
 Restart=on-failure
 RestartSec=5s
 UMask=0027
-NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
 ReadWritePaths=${DATA_DIR}
-CapabilityBoundingSet=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]
@@ -269,6 +275,66 @@ WantedBy=multi-user.target
 EOF
     chmod 0644 "$UNIT_PATH"
     chown root:root "$UNIT_PATH"
+}
+
+write_privileged_units_and_sudoers() {
+    local managed_path
+    for managed_path in "$PROFILE_APPLY_UNIT_PATH" "$PUBLISH_UNIT_PATH" "$RECOVER_UNIT_PATH" "$SUDOERS_PATH"; do
+        if [ -e "$managed_path" ] && ! grep -qx '# managed-by: nginx-acl-manager' "$managed_path"; then
+            fail "目标文件已存在且不属于本工具: ${managed_path}"
+        fi
+    done
+    cat >"$PROFILE_APPLY_UNIT_PATH" <<EOF
+# managed-by: nginx-acl-manager
+[Unit]
+Description=Validate and apply Nginx ACL Manager profile
+After=${SERVICE_NAME}.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0027
+ExecStart=${BINARY_PATH} profile apply-candidate
+EOF
+
+    cat >"$PUBLISH_UNIT_PATH" <<EOF
+# managed-by: nginx-acl-manager
+[Unit]
+Description=Publish Nginx ACL Manager rules
+After=${SERVICE_NAME}.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0027
+ExecStart=${BINARY_PATH} publish
+EOF
+
+    cat >"$RECOVER_UNIT_PATH" <<EOF
+# managed-by: nginx-acl-manager
+[Unit]
+Description=Recover unfinished Nginx ACL Manager publish
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0027
+ExecStart=${BINARY_PATH} recover
+EOF
+
+    cat >"$SUDOERS_PATH" <<EOF
+# managed-by: nginx-acl-manager
+${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start nginx-acl-manager-profile-apply.service
+${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start nginx-acl-manager-publish.service
+EOF
+    chmod 0644 "$PROFILE_APPLY_UNIT_PATH" "$PUBLISH_UNIT_PATH" "$RECOVER_UNIT_PATH"
+    chown root:root "$PROFILE_APPLY_UNIT_PATH" "$PUBLISH_UNIT_PATH" "$RECOVER_UNIT_PATH"
+    chmod 0440 "$SUDOERS_PATH"
+    chown root:root "$SUDOERS_PATH"
+    visudo -cf "$SUDOERS_PATH" >/dev/null || fail "sudoers 配置校验失败"
 }
 
 detect_nginx_candidate() {
@@ -366,6 +432,7 @@ fresh_install() {
         seed_nginx_candidate
     fi
     write_service_unit
+    write_privileged_units_and_sudoers
     systemctl daemon-reload
     if ! systemctl enable --now "${SERVICE_NAME}.service"; then
         systemctl status "${SERVICE_NAME}.service" --no-pager || true
@@ -376,8 +443,7 @@ fresh_install() {
     if [ "$reuse_existing" = "true" ]; then
         log "服务监听端口沿用 ${CONFIG_PATH} 中的保留值"
     else
-        log "服务仅监听 127.0.0.1:${PORT}"
-        log "可通过 SSH 隧道访问: ssh -L ${PORT}:127.0.0.1:${PORT} <user>@<server>"
+        log "服务监听 0.0.0.0:${PORT}，请通过防火墙或反向代理限制访问范围"
     fi
 }
 
@@ -399,9 +465,13 @@ upgrade_install() {
     fi
 
     download_release "$version"
+    ensure_service_user_and_directories
     cp -p "$BINARY_PATH" "${TEMP_DIR}/nginx-acl-manager.previous"
     systemctl stop "${SERVICE_NAME}.service"
     install -m 0755 -o root -g root "${TEMP_DIR}/nginx-acl-manager" "$BINARY_PATH"
+    write_service_unit
+    write_privileged_units_and_sudoers
+    systemctl daemon-reload
     if ! systemctl start "${SERVICE_NAME}.service"; then
         install -m 0755 -o root -g root "${TEMP_DIR}/nginx-acl-manager.previous" "$BINARY_PATH"
         systemctl start "${SERVICE_NAME}.service" || true
@@ -424,7 +494,20 @@ uninstall_manager() {
     esac
 
     systemctl disable --now "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
+    local active_profile="${CONFIG_DIR}/nginx-profile.json"
+    if [ -f "$active_profile" ]; then
+        local active_nginx_service
+        active_nginx_service="$(sed -n 's/^[[:space:]]*"serviceName":[[:space:]]*"\([A-Za-z0-9_.@-]*\.service\)"[,]*[[:space:]]*$/\1/p' "$active_profile" | head -n 1)"
+        if [[ "$active_nginx_service" =~ ^[A-Za-z0-9_.@-]+\.service$ ]]; then
+            local managed_drop_in="/etc/systemd/system/${active_nginx_service}.d/50-nginx-acl-manager-recover.conf"
+            if [ -f "$managed_drop_in" ] && grep -qx '# managed-by: nginx-acl-manager' "$managed_drop_in" && grep -qx 'Requires=nginx-acl-manager-recover.service' "$managed_drop_in"; then
+                rm -f -- "$managed_drop_in"
+                rmdir -- "/etc/systemd/system/${active_nginx_service}.d" >/dev/null 2>&1 || true
+            fi
+        fi
+    fi
     rm -f -- "$UNIT_PATH"
+    rm -f -- "$PROFILE_APPLY_UNIT_PATH" "$PUBLISH_UNIT_PATH" "$RECOVER_UNIT_PATH" "$SUDOERS_PATH"
     rm -f -- "$BINARY_PATH"
     systemctl daemon-reload
     if id "$SERVICE_USER" >/dev/null 2>&1; then
@@ -446,7 +529,7 @@ main() {
 
     validate_port
     detect_platform
-    for command in curl tar sha256sum install mktemp systemctl; do
+    for command in curl tar sha256sum install mktemp systemctl visudo; do
         require_command "$command"
     done
 

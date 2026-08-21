@@ -1,0 +1,6 @@
+{{define "preview.html"}}
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>发布预览 · {{.Project.DisplayName}}</title><style>body{max-width:80rem;margin:2rem auto;padding:0 1rem;font:16px/1.5 system-ui,sans-serif}pre{padding:1rem;background:#f6f8fa;overflow:auto;white-space:pre-wrap}.warning{color:#b42318}button{padding:.55rem .8rem}</style></head><body><nav><a href="/projects/{{.Project.Slug}}">返回项目</a></nav><main><h1>发布预览：{{.Project.DisplayName}}</h1>
+{{range .Warnings}}<p class="warning">{{.}}</p>{{end}}
+<h2>相对当前版本的差异</h2>{{if .Diff}}<pre>{{.Diff}}</pre>{{else}}<p>生成配置与当前版本一致。</p>{{end}}
+<h2>完整候选文件</h2>{{range $path,$content := .Files}}<h3><code>{{$path}}</code></h3><pre>{{printf "%s" $content}}</pre>{{end}}
+<form method="post" action="/projects/{{.Project.Slug}}/publish"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button>确认发布当前草稿</button></form></main></body></html>{{end}}

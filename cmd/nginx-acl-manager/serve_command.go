@@ -14,15 +14,23 @@ import (
 	"time"
 
 	"nginx-acl-manager/internal/auth"
+	"nginx-acl-manager/internal/draft"
 	"nginx-acl-manager/internal/nginxprofile"
+	"nginx-acl-manager/internal/release"
 	"nginx-acl-manager/internal/serverconfig"
 	webhandler "nginx-acl-manager/internal/web"
 )
 
-type unavailableApplyTrigger struct{}
+type fixedSystemdTrigger struct {
+	unit string
+}
 
-func (unavailableApplyTrigger) Trigger(context.Context) error {
-	return errors.New("当前版本尚未实现 root Profile apply")
+func (t fixedSystemdTrigger) Trigger(ctx context.Context) error {
+	command := exec.CommandContext(ctx, defaultSudoPath, "-n", defaultSystemctlPath, "start", t.unit)
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("启动固定 systemd unit %s: %w", t.unit, err)
+	}
+	return nil
 }
 
 func runServe() error {
@@ -54,10 +62,18 @@ func runServe() error {
 			CandidatePath: defaultCandidateProfilePath,
 			ActivePath:    defaultActiveProfilePath,
 		},
-		ApplyTrigger:     unavailableApplyTrigger{},
-		DefaultCandidate: nginxprofile.DefaultCandidate(detectedBinary),
-		AllowedHost:      address,
-		Logger:           slog.Default(),
+		ApplyTrigger:   fixedSystemdTrigger{unit: profileApplyUnitName},
+		PublishTrigger: fixedSystemdTrigger{unit: publishUnitName},
+		Drafts:         draft.Store{Directory: defaultDraftDirectory},
+		Releases: release.Store{
+			AccessControlRoot: defaultAccessControlRoot,
+			CandidatePath:     defaultPublishCandidatePath,
+			TransactionPath:   defaultTransactionPath,
+			ResultPath:        defaultPublishResultPath,
+		},
+		ProfileResultPath: defaultProfileResultPath,
+		DefaultCandidate:  nginxprofile.DefaultCandidate(detectedBinary),
+		Logger:            slog.Default(),
 	})
 	if err != nil {
 		return err

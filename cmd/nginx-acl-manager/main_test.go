@@ -13,7 +13,7 @@ import (
 func TestConfigInitCommand(t *testing.T) {
 	t.Parallel()
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		t.Fatalf("Listen() error = %v", err)
 	}
@@ -43,7 +43,7 @@ func TestConfigInitCommand(t *testing.T) {
 func TestConfigInitRejectsOccupiedPort(t *testing.T) {
 	t.Parallel()
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		t.Fatalf("Listen() error = %v", err)
 	}

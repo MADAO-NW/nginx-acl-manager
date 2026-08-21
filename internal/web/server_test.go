@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"nginx-acl-manager/internal/auth"
+	"nginx-acl-manager/internal/draft"
 	"nginx-acl-manager/internal/nginxprofile"
+	"nginx-acl-manager/internal/release"
 )
 
 // csrfPattern 提取服务端模板中的 CSRF hidden input。
@@ -161,7 +163,7 @@ func TestLoginUsesUniformCredentialError(t *testing.T) {
 	}
 }
 
-func TestAllowedHost(t *testing.T) {
+func TestExternalHost(t *testing.T) {
 	t.Parallel()
 
 	sessions, err := auth.NewSessionStore(30*time.Minute, 12*time.Hour)
@@ -173,7 +175,6 @@ func TestAllowedHost(t *testing.T) {
 		Sessions:     sessions,
 		Profiles:     nginxprofile.Store{CandidatePath: filepath.Join(t.TempDir(), "candidate.json")},
 		ApplyTrigger: &countingTrigger{},
-		AllowedHost:  "127.0.0.1:7582",
 	})
 	if err != nil {
 		t.Fatalf("NewHandler() error = %v", err)
@@ -182,8 +183,59 @@ func TestAllowedHost(t *testing.T) {
 	request.Host = "attacker.example"
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("untrusted host = %d", response.Code)
+	if response.Code != http.StatusOK {
+		t.Fatalf("external host = %d", response.Code)
+	}
+}
+
+func TestProjectDraftFlowAndPreview(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	sessions, err := auth.NewSessionStore(30*time.Minute, 12*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID, csrfToken, err := sessions.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles := nginxprofile.Store{CandidatePath: filepath.Join(dir, "profile-candidate.json"), ActivePath: filepath.Join(dir, "profile.json")}
+	if err := profiles.SaveActive(nginxprofile.Profile{BinaryPath: "/usr/sbin/nginx", ConfigPath: "/etc/nginx/nginx.conf", ServiceName: "nginx.service", HTTPIncludeFile: "/etc/nginx/conf.d/manager.conf", RealIPSnippetPath: "/etc/nginx/snippets/real.conf"}); err != nil {
+		t.Fatal(err)
+	}
+	releases := release.Store{AccessControlRoot: filepath.Join(dir, "acl"), CandidatePath: filepath.Join(dir, "candidate.json")}
+	if _, err := releases.EnsureInitialRelease(); err != nil {
+		t.Fatal(err)
+	}
+	drafts := draft.Store{Directory: filepath.Join(dir, "drafts")}
+	handler, err := NewHandler(Options{Verifier: fixedVerifier{}, Sessions: sessions, Profiles: profiles, ApplyTrigger: &countingTrigger{}, PublishTrigger: &countingTrigger{}, Drafts: drafts, Releases: releases})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := &http.Cookie{Name: sessionCookieName, Value: sessionID}
+	create := performRequest(handler, http.MethodPost, "/projects", url.Values{"csrf_token": {csrfToken}, "slug": {"demo"}, "displayName": {"Demo"}}, cookie)
+	if create.Code != http.StatusSeeOther {
+		t.Fatalf("create project = %d: %s", create.Code, create.Body.String())
+	}
+	instance := url.Values{"csrf_token": {csrfToken}, "key": {"main"}, "displayName": {"主实例"}, "enabled": {"on"}, "localPort": {"8080"}, "denyStatus": {"404"}}
+	if response := performRequest(handler, http.MethodPost, "/projects/demo/instances", instance, cookie); response.Code != http.StatusSeeOther {
+		t.Fatalf("create instance = %d: %s", response.Code, response.Body.String())
+	}
+	allowlist := url.Values{"csrf_token": {csrfToken}, "cidr": {"203.0.113.10"}, "label": {"出口"}}
+	if response := performRequest(handler, http.MethodPost, "/projects/demo/instances/main/allowlist", allowlist, cookie); response.Code != http.StatusSeeOther {
+		t.Fatalf("create allowlist = %d: %s", response.Code, response.Body.String())
+	}
+	rule := url.Values{"csrf_token": {csrfToken}, "name": {"账户"}, "methods": {"GET", "HEAD"}, "pathType": {"numeric_segment"}, "pathValue": {"/accounts/{id}"}, "optionalTrailingSlash": {"on"}}
+	if response := performRequest(handler, http.MethodPost, "/projects/demo/instances/main/rules", rule, cookie); response.Code != http.StatusSeeOther {
+		t.Fatalf("create rule = %d: %s", response.Code, response.Body.String())
+	}
+	project, err := drafts.Load("demo")
+	if err != nil || len(project.Instances) != 1 || len(project.Instances[0].Rules) != 1 || project.Instances[0].Rules[0].Enabled {
+		t.Fatalf("draft = %#v, %v", project, err)
+	}
+	preview := performRequest(handler, http.MethodPost, "/projects/demo/preview", url.Values{"csrf_token": {csrfToken}}, cookie)
+	if preview.Code != http.StatusOK || !strings.Contains(preview.Body.String(), "projects/demo/instances/main") {
+		t.Fatalf("preview = %d: %s", preview.Code, preview.Body.String())
 	}
 }
 
