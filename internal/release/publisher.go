@@ -255,6 +255,19 @@ func (s Store) buildRelease(revision, previous string, candidate model.Candidate
 	if err := writeJSONAtomic(filepath.Join(temporary, "manifest.json"), manifest, 0o644); err != nil {
 		return err
 	}
+	// root oneshot 的 UMask 不得阻止 Web 只读访问已完成的不可变 release。
+	if err := filepath.WalkDir(temporary, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		mode := os.FileMode(0o644)
+		if entry.IsDir() {
+			mode = 0o755
+		}
+		return os.Chmod(path, mode)
+	}); err != nil {
+		return err
+	}
 	if err := os.Rename(temporary, filepath.Join(releasesDirectory, revision)); err != nil {
 		return err
 	}

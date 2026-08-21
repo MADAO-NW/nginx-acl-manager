@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"nginx-acl-manager/internal/model"
@@ -85,6 +87,52 @@ func TestPublishRollsBackCurrentAfterSwitchFailure(t *testing.T) {
 	}
 	if current, _ := store.CurrentRevision(); current != oldRevision {
 		t.Fatalf("rollback current = %q, want %q", current, oldRevision)
+	}
+}
+
+func TestBuildReleaseKeepsWebReadablePermissionsWithRestrictiveUmask(t *testing.T) {
+	oldUmask := syscall.Umask(0o027)
+	defer syscall.Umask(oldUmask)
+
+	dir := t.TempDir()
+	store := Store{AccessControlRoot: filepath.Join(dir, "acl")}
+	project := model.Project{
+		Slug:        "demo",
+		DisplayName: "Demo",
+		Instances: []model.Instance{{
+			Key:          "local",
+			DisplayName:  "Local",
+			Enabled:      true,
+			LocalPort:    8317,
+			DenyStatus:   403,
+			AllowedCIDRs: []model.AllowlistEntry{},
+			Rules:        []model.Rule{},
+		}},
+	}
+	const revision = "revision-umask"
+	if err := store.buildRelease(revision, "", model.Candidate{Action: "publish", ChangedProject: project.Slug, Projects: []model.Project{project}}); err != nil {
+		t.Fatalf("buildRelease() error = %v", err)
+	}
+
+	releaseDirectory := filepath.Join(store.AccessControlRoot, "releases", revision)
+	checks := []struct {
+		path string
+		mode os.FileMode
+	}{
+		{path: releaseDirectory, mode: 0o755},
+		{path: filepath.Join(releaseDirectory, "projects", "demo", "instances", "local", "http"), mode: 0o755},
+		{path: filepath.Join(releaseDirectory, "projects", "demo", "instances", "local", "http", "10-allowlist.conf"), mode: 0o644},
+		{path: filepath.Join(releaseDirectory, "projects", "demo", "source.json"), mode: 0o644},
+		{path: filepath.Join(releaseDirectory, "manifest.json"), mode: 0o644},
+	}
+	for _, check := range checks {
+		info, err := os.Stat(check.path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", check.path, err)
+		}
+		if mode := info.Mode().Perm(); mode != check.mode {
+			t.Errorf("mode %s = %04o, want %04o", check.path, mode, check.mode)
+		}
 	}
 }
 
