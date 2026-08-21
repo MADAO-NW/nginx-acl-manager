@@ -97,7 +97,7 @@ func ApplyCandidate(ctx context.Context, options ApplyOptions) (err error) {
 			return writeApplyFailure(options, "候选路径类型无效", err)
 		}
 	}
-	if err := validateProtectedAncestors(filepath.Dir(profile.HTTPIncludeFile), options.ApplicationUID, options.ApplicationGID); err != nil {
+	if err := validateProtectedParent(filepath.Dir(profile.HTTPIncludeFile), options.ApplicationUID, options.ApplicationGID); err != nil {
 		return writeApplyFailure(options, "全局入口父目录权限不安全", err)
 	}
 
@@ -216,7 +216,7 @@ func validateProtectedPath(label, path string, applicationUID, applicationGID in
 	return nil
 }
 
-func validateProtectedAncestors(path string, applicationUID, applicationGID int) error {
+func validateProtectedParent(path string, applicationUID, applicationGID int) error {
 	current := filepath.Clean(path)
 	for {
 		if _, err := os.Stat(current); errors.Is(err, os.ErrNotExist) {
@@ -232,10 +232,7 @@ func validateProtectedAncestors(path string, applicationUID, applicationGID int)
 		if err := validateProtectedPath("管理器全局入口父目录", current, applicationUID, applicationGID); err != nil {
 			return err
 		}
-		if current == string(filepath.Separator) {
-			return nil
-		}
-		current = filepath.Dir(current)
+		return nil
 	}
 }
 
