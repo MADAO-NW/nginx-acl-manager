@@ -26,20 +26,24 @@ const (
 	argonParallelism     uint8  = 1
 	argonSaltLength             = 16
 	argonKeyLength              = 32
-	minimumPasswordRunes        = 15
+	minimumPasswordRunes        = 6
 )
 
 // Credentials 是 root 所有认证文件中的单管理员数据。
 type Credentials struct {
-	Username     string `json:"username"`
-	PasswordHash string `json:"passwordHash"`
+	Username     string      `json:"username"`
+	PasswordHash string      `json:"passwordHash"`
+	TOTP         *TOTPConfig `json:"totp,omitempty"`
 }
 
 // Verifier 在服务启动时完成凭据格式校验，登录时只执行固定参数比较。
 type Verifier struct {
+	username       string
 	usernameDigest [sha256.Size]byte
 	salt           []byte
 	expected       []byte
+	totpSecret     string
+	fingerprint    string
 }
 
 // HashPassword 使用固定 Argon2id 参数生成包含算法元数据的 PHC 字符串。
@@ -93,6 +97,9 @@ func LoadCredentials(path string) (Credentials, error) {
 	if _, _, err := parsePasswordHash(credentials.PasswordHash); err != nil {
 		return Credentials{}, err
 	}
+	if err := validateTOTPConfig(credentials.TOTP); err != nil {
+		return Credentials{}, err
+	}
 	return credentials, nil
 }
 
@@ -105,6 +112,9 @@ func SaveCredentials(path string, credentials Credentials) error {
 		return err
 	}
 	if _, _, err := parsePasswordHash(credentials.PasswordHash); err != nil {
+		return err
+	}
+	if err := validateTOTPConfig(credentials.TOTP); err != nil {
 		return err
 	}
 
@@ -190,10 +200,24 @@ func NewVerifier(credentials Credentials) (*Verifier, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateTOTPConfig(credentials.TOTP); err != nil {
+		return nil, err
+	}
+	fingerprint, err := CredentialsFingerprint(credentials)
+	if err != nil {
+		return nil, err
+	}
+	totpSecret := ""
+	if credentials.TOTP != nil {
+		totpSecret = credentials.TOTP.Secret
+	}
 	return &Verifier{
+		username:       credentials.Username,
 		usernameDigest: sha256.Sum256([]byte(credentials.Username)),
 		salt:           salt,
 		expected:       expected,
+		totpSecret:     totpSecret,
+		fingerprint:    fingerprint,
 	}, nil
 }
 
@@ -204,6 +228,31 @@ func (v *Verifier) Verify(username, password string) bool {
 	actual := argon2.IDKey([]byte(password), v.salt, argonIterations, argonMemory, argonParallelism, argonKeyLength)
 	passwordMatches := subtle.ConstantTimeCompare(actual, v.expected)
 	return usernameMatches&passwordMatches == 1
+}
+
+// Username 返回当前单管理员用户名。
+func (v *Verifier) Username() string {
+	return v.username
+}
+
+// TOTPSecret 返回已启用的 TOTP 密钥；空字符串表示未启用。
+func (v *Verifier) TOTPSecret() string {
+	return v.totpSecret
+}
+
+// Fingerprint 返回正式凭据的稳定摘要，用于阻止过期候选覆盖新配置。
+func (v *Verifier) Fingerprint() string {
+	return v.fingerprint
+}
+
+// CredentialsFingerprint 计算不暴露凭据内容的稳定摘要。
+func CredentialsFingerprint(credentials Credentials) (string, error) {
+	data, err := json.Marshal(credentials)
+	if err != nil {
+		return "", fmt.Errorf("序列化管理员凭据摘要: %w", err)
+	}
+	digest := sha256.Sum256(data)
+	return fmt.Sprintf("%x", digest[:]), nil
 }
 
 func validateUsername(username string) error {

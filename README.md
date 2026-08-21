@@ -6,7 +6,7 @@
 
 当前版本已经包含：
 
-- 单管理员 Argon2id 凭据初始化与登录；
+- 单管理员 Argon2id 凭据初始化、可选 TOTP 双因素登录与安全设置后端；
 - 内存 Session 和 CSRF 校验；
 - 管理端口配置；
 - Nginx Profile 候选配置、root 强校验、原子应用和失败回退；
@@ -35,7 +35,7 @@ curl -fsSL https://raw.githubusercontent.com/MADAO-NW/nginx-acl-manager/main/dep
 4. 创建专用非 root 系统用户、配置目录和数据目录；
 5. 通过本机 TTY 设置唯一管理员用户名和密码；
 6. 探测 Nginx 路径并保存候选 Profile；
-7. 注册 Web、Profile apply、publish、recover systemd unit 和精确 sudoers；
+7. 注册 Web、Profile apply、publish、recover、auth apply systemd unit 和精确 sudoers；
 8. 启动 `nginx-acl-manager.service`。
 
 服务默认监听 `0.0.0.0:7582`，安装脚本不会开放防火墙。请按实际部署通过防火墙限制来源；需要公网访问时，建议在服务前配置 HTTPS 反向代理，避免管理员凭据和 Session 通过明文 HTTP 传输。
@@ -78,6 +78,9 @@ sudo nginx-acl-manager admin set-password
 # 同时重置用户名和密码
 sudo nginx-acl-manager admin reset
 
+# 认证器丢失时，以 root 权限停用 TOTP
+sudo nginx-acl-manager admin disable-2fa
+
 # 修改管理页面端口
 sudo nginx-acl-manager config set-port --port 17582
 
@@ -94,7 +97,7 @@ curl -fsSL https://raw.githubusercontent.com/MADAO-NW/nginx-acl-manager/main/dep
   | sudo bash -s -- uninstall
 ```
 
-管理员密码始终从 `/dev/tty` 交互读取且不回显，不支持通过命令参数或环境变量传入。
+管理员密码至少 6 个字符，始终从 `/dev/tty` 交互读取且不回显，不支持通过命令参数或环境变量传入。建议使用更长密码，并在 Web 安全设置页面完成 TOTP 配置；TOTP 不在安装初始化时强制启用。
 
 ## 发布版本
 
@@ -114,3 +117,21 @@ go test ./...
 go vet ./...
 go build ./cmd/nginx-acl-manager
 ```
+
+需要在浏览器中检查页面时，可把全部本地测试数据放在仓库内的 `.local-dev/`。该目录已加入 `.gitignore`，不会被 Git 跟踪：
+
+```bash
+mkdir -p .local-dev
+
+go run ./cmd/nginx-acl-manager config init \
+  --output "$PWD/.local-dev/config.json" \
+  --port 17582
+
+go run ./cmd/nginx-acl-manager admin init \
+  --output "$PWD/.local-dev/auth.json"
+
+go run ./cmd/nginx-acl-manager serve \
+  --local-dir "$PWD/.local-dev"
+```
+
+随后访问 `http://127.0.0.1:17582/`。首次初始化后只需重新执行最后一条启动命令；本地开发模式会把配置、凭据、草稿、预览候选和发布结果全部限制在 `.local-dev/`，并拒绝执行 systemd Profile apply 或 publish。未指定 `--local-dir` 时，生产部署路径和行为保持不变。

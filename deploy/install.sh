@@ -15,6 +15,7 @@ UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 PROFILE_APPLY_UNIT_PATH="/etc/systemd/system/nginx-acl-manager-profile-apply.service"
 PUBLISH_UNIT_PATH="/etc/systemd/system/nginx-acl-manager-publish.service"
 RECOVER_UNIT_PATH="/etc/systemd/system/nginx-acl-manager-recover.service"
+AUTH_APPLY_UNIT_PATH="/etc/systemd/system/nginx-acl-manager-auth-apply.service"
 SUDOERS_PATH="/etc/sudoers.d/nginx-acl-manager"
 
 ACTION="install"
@@ -244,6 +245,7 @@ ensure_service_user_and_directories() {
     install -d -m 0750 -o root -g "$SERVICE_USER" "$CONFIG_DIR"
     install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" "$DATA_DIR"
     install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" "${DATA_DIR}/staging"
+    install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" "${DATA_DIR}/auth"
     install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" "${DATA_DIR}/drafts/projects"
     install -d -m 0750 -o root -g "$SERVICE_USER" "${DATA_DIR}/results"
     install -d -m 0755 -o root -g root "/etc/nginx/access-control/releases"
@@ -279,7 +281,7 @@ EOF
 
 write_privileged_units_and_sudoers() {
     local managed_path
-    for managed_path in "$PROFILE_APPLY_UNIT_PATH" "$PUBLISH_UNIT_PATH" "$RECOVER_UNIT_PATH" "$SUDOERS_PATH"; do
+    for managed_path in "$PROFILE_APPLY_UNIT_PATH" "$PUBLISH_UNIT_PATH" "$RECOVER_UNIT_PATH" "$AUTH_APPLY_UNIT_PATH" "$SUDOERS_PATH"; do
         if [ -e "$managed_path" ] && ! grep -qx '# managed-by: nginx-acl-manager' "$managed_path"; then
             fail "目标文件已存在且不属于本工具: ${managed_path}"
         fi
@@ -325,13 +327,28 @@ UMask=0027
 ExecStart=${BINARY_PATH} recover
 EOF
 
+    cat >"$AUTH_APPLY_UNIT_PATH" <<EOF
+# managed-by: nginx-acl-manager
+[Unit]
+Description=Apply Nginx ACL Manager authentication changes
+After=${SERVICE_NAME}.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0027
+ExecStart=${BINARY_PATH} auth apply-candidate
+EOF
+
     cat >"$SUDOERS_PATH" <<EOF
 # managed-by: nginx-acl-manager
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start nginx-acl-manager-profile-apply.service
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start nginx-acl-manager-publish.service
+${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start nginx-acl-manager-auth-apply.service
 EOF
-    chmod 0644 "$PROFILE_APPLY_UNIT_PATH" "$PUBLISH_UNIT_PATH" "$RECOVER_UNIT_PATH"
-    chown root:root "$PROFILE_APPLY_UNIT_PATH" "$PUBLISH_UNIT_PATH" "$RECOVER_UNIT_PATH"
+    chmod 0644 "$PROFILE_APPLY_UNIT_PATH" "$PUBLISH_UNIT_PATH" "$RECOVER_UNIT_PATH" "$AUTH_APPLY_UNIT_PATH"
+    chown root:root "$PROFILE_APPLY_UNIT_PATH" "$PUBLISH_UNIT_PATH" "$RECOVER_UNIT_PATH" "$AUTH_APPLY_UNIT_PATH"
     chmod 0440 "$SUDOERS_PATH"
     chown root:root "$SUDOERS_PATH"
     visudo -cf "$SUDOERS_PATH" >/dev/null || fail "sudoers 配置校验失败"
@@ -507,7 +524,7 @@ uninstall_manager() {
         fi
     fi
     rm -f -- "$UNIT_PATH"
-    rm -f -- "$PROFILE_APPLY_UNIT_PATH" "$PUBLISH_UNIT_PATH" "$RECOVER_UNIT_PATH" "$SUDOERS_PATH"
+    rm -f -- "$PROFILE_APPLY_UNIT_PATH" "$PUBLISH_UNIT_PATH" "$RECOVER_UNIT_PATH" "$AUTH_APPLY_UNIT_PATH" "$SUDOERS_PATH"
     rm -f -- "$BINARY_PATH"
     systemctl daemon-reload
     if id "$SERVICE_USER" >/dev/null 2>&1; then

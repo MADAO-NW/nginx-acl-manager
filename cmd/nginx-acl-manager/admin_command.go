@@ -22,6 +22,8 @@ func runAdmin(args []string) error {
 	switch args[0] {
 	case "init", "reset", "set-username", "set-password":
 		return updateAdministrator(args[0], args[1:])
+	case "disable-2fa":
+		return disableAdministratorTOTP(args[1:])
 	default:
 		return fmt.Errorf("未知 admin 子命令 %q", args[0])
 	}
@@ -48,7 +50,7 @@ func updateAdministrator(action string, args []string) error {
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("检查管理员凭据: %w", err)
 		}
-	} else if action != "reset" {
+	} else {
 		loaded, err := auth.LoadCredentials(*outputPath)
 		if err != nil {
 			return err
@@ -73,7 +75,7 @@ func updateAdministrator(action string, args []string) error {
 
 	passwordHash := current.PasswordHash
 	if action == "init" || action == "reset" || action == "set-password" {
-		password, readErr := readTTYPassword(tty, reader, "管理员密码（至少 15 个字符）: ")
+		password, readErr := readTTYPassword(tty, reader, "管理员密码（至少 6 个字符）: ")
 		if readErr != nil {
 			return readErr
 		}
@@ -93,6 +95,7 @@ func updateAdministrator(action string, args []string) error {
 	if err := auth.SaveCredentials(*outputPath, auth.Credentials{
 		Username:     username,
 		PasswordHash: passwordHash,
+		TOTP:         current.TOTP,
 	}); err != nil {
 		return err
 	}
@@ -101,6 +104,36 @@ func updateAdministrator(action string, args []string) error {
 		if err := restartManagerService(); err != nil {
 			return fmt.Errorf("凭据已更新，但重启服务失败: %w", err)
 		}
+	}
+	return nil
+}
+
+func disableAdministratorTOTP(args []string) error {
+	flags := flag.NewFlagSet("admin disable-2fa", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	outputPath := flags.String("output", defaultCredentialsPath, "管理员凭据文件")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("admin disable-2fa 命令包含多余参数")
+	}
+	if err := requireAbsolutePath(*outputPath, "管理员凭据文件"); err != nil {
+		return err
+	}
+	credentials, err := auth.LoadCredentials(*outputPath)
+	if err != nil {
+		return err
+	}
+	if credentials.TOTP == nil {
+		return nil
+	}
+	credentials.TOTP = nil
+	if err := auth.SaveCredentials(*outputPath, credentials); err != nil {
+		return err
+	}
+	if err := restartManagerService(); err != nil {
+		return fmt.Errorf("双因素认证已停用，但重启服务失败: %w", err)
 	}
 	return nil
 }

@@ -53,8 +53,11 @@ func TestHashPasswordUsesIndependentSalt(t *testing.T) {
 func TestHashPasswordRejectsShortPassword(t *testing.T) {
 	t.Parallel()
 
-	if _, err := HashPassword("short password"); err == nil {
+	if _, err := HashPassword("12345"); err == nil {
 		t.Fatal("HashPassword(short) error = nil")
+	}
+	if _, err := HashPassword("123456"); err != nil {
+		t.Fatalf("HashPassword(minimum) error = %v", err)
 	}
 }
 

@@ -1,6 +1,116 @@
 {{define "preview.html"}}
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>发布预览 · {{.Project.DisplayName}}</title><style>body{max-width:80rem;margin:2rem auto;padding:0 1rem;font:16px/1.5 system-ui,sans-serif}pre{padding:1rem;background:#f6f8fa;overflow:auto;white-space:pre-wrap}.warning{color:#b42318}button{padding:.55rem .8rem}</style></head><body><nav><a href="/projects/{{.Project.Slug}}">返回项目</a></nav><main><h1>发布预览：{{.Project.DisplayName}}</h1>
-{{range .Warnings}}<p class="warning">{{.}}</p>{{end}}
-<h2>相对当前版本的差异</h2>{{if .Diff}}<pre>{{.Diff}}</pre>{{else}}<p>生成配置与当前版本一致。</p>{{end}}
-<h2>完整候选文件</h2>{{range $path,$content := .Files}}<h3><code>{{$path}}</code></h3><pre>{{printf "%s" $content}}</pre>{{end}}
-<form method="post" action="/projects/{{.Project.Slug}}/publish"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button>确认发布当前草稿</button></form></main></body></html>{{end}}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>发布预览 · {{.Project.DisplayName}} · Nginx ACL Manager</title>
+  {{template "styles" .}}
+</head>
+<body>
+  <div class="app-container">
+    {{template "sidebar_dashboard" .}}
+
+    <div class="main-wrapper">
+      <header class="topbar">
+        <div class="breadcrumb">
+          <a href="/">📊 仪表盘概览</a>
+          <span class="breadcrumb-separator">/</span>
+          <a href="/projects/{{.Project.Slug}}">{{.Project.DisplayName}}</a>
+          <span class="breadcrumb-separator">/</span>
+          <span class="breadcrumb-current">发布配置预览 & Diff</span>
+        </div>
+        <div class="topbar-actions">
+          <a href="/projects/{{.Project.Slug}}" class="btn btn-sm btn-secondary">
+            &larr; 返回项目
+          </a>
+          <form method="post" action="/projects/{{.Project.Slug}}/publish" style="display:inline; margin:0;" onsubmit="return confirm('确定立即发布这些配置到生产 Nginx 环境吗？');">
+            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+            <button type="submit" class="btn btn-sm btn-primary">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              确认发布当前草稿
+            </button>
+          </form>
+        </div>
+      </header>
+
+      <main class="content-body">
+        <div style="margin-bottom: 20px;">
+          <h1>发布预览：{{.Project.DisplayName}}</h1>
+          <p class="page-desc">检查即将生成的 Nginx ACL 配置文件及其与当前线上版本的差异。确认无误后点击“确认发布”。</p>
+        </div>
+
+        {{range .Warnings}}
+          <div class="alert alert-warning" role="alert">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <div><strong>警告提示：</strong>{{.}}</div>
+          </div>
+        {{end}}
+
+        <!-- 差异 Diff 卡片 -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>
+              相对当前版本的差异 (Diff)
+            </div>
+            {{if .Diff}}
+              <span class="badge badge-amber">存在配置变动</span>
+            {{else}}
+              <span class="badge badge-green">与线上版本一致</span>
+            {{end}}
+          </div>
+          <div class="card-body">
+            {{if .Diff}}
+              <pre class="diff-container">{{.Diff}}</pre>
+            {{else}}
+              <div style="text-align: center; padding: 24px; color: var(--text-muted);">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" style="margin-bottom: 8px;"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                <p style="font-size: 14px; font-weight: 500; color: var(--text-main);">生成配置与当前线上版本一致</p>
+                <p style="font-size: 13px; margin-top: 4px;">草稿暂无未提交的差异变更。</p>
+              </div>
+            {{end}}
+          </div>
+        </div>
+
+        <!-- 完整候选文件卡片 -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              完整候选文件 (Candidate Files)
+            </div>
+            <span class="badge badge-blue">{{len .Files}} 个配置文件</span>
+          </div>
+          <div class="card-body">
+            {{range $path, $content := .Files}}
+              <div style="margin-bottom: 20px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+                  <h3 style="margin: 0; font-size: 13.5px; font-family: var(--font-mono); color: var(--text-main);">
+                    📁 <code>{{$path}}</code>
+                  </h3>
+                </div>
+                <div class="code-box">
+                  <code>{{printf "%s" $content}}</code>
+                </div>
+              </div>
+            {{end}}
+          </div>
+          <div class="card-footer" style="justify-content: space-between;">
+            <a href="/projects/{{.Project.Slug}}" class="btn btn-secondary">&larr; 返回项目详情</a>
+            <form method="post" action="/projects/{{.Project.Slug}}/publish" style="margin:0;" onsubmit="return confirm('确定立即发布这些配置到生产 Nginx 环境吗？');">
+              <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+              <button type="submit" class="btn btn-primary">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                确认发布当前草稿
+              </button>
+            </form>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+  {{template "scripts" .}}
+</body>
+</html>
+{{end}}

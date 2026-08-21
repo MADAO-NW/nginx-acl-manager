@@ -82,3 +82,36 @@ func TestNewSessionStoreRejectsInvalidTimeouts(t *testing.T) {
 		t.Fatal("NewSessionStore(idle > absolute) error = nil")
 	}
 }
+
+func TestPendingSessionPromotionAndDeleteAll(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewSessionStore(30*time.Minute, time.Hour)
+	if err != nil {
+		t.Fatalf("NewSessionStore() error = %v", err)
+	}
+	pendingID, pendingCSRF, err := store.CreatePending()
+	if err != nil {
+		t.Fatalf("CreatePending() error = %v", err)
+	}
+	if _, ok := store.Get(pendingID); ok {
+		t.Fatal("pending session became authenticated")
+	}
+	if got, ok := store.GetPending(pendingID); !ok || got != pendingCSRF {
+		t.Fatalf("GetPending() = %q, %v", got, ok)
+	}
+	sessionID, _, ok, err := store.PromotePending(pendingID)
+	if err != nil || !ok {
+		t.Fatalf("PromotePending() = %q, %v, %v", sessionID, ok, err)
+	}
+	if _, ok := store.GetPending(pendingID); ok {
+		t.Fatal("PromotePending() kept pending session")
+	}
+	if _, ok := store.Get(sessionID); !ok {
+		t.Fatal("promoted session is not authenticated")
+	}
+	store.DeleteAll()
+	if _, ok := store.Get(sessionID); ok {
+		t.Fatal("DeleteAll() left session active")
+	}
+}

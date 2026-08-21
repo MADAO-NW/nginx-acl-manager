@@ -34,6 +34,21 @@ type previewPageData struct {
 	Warnings  []string
 }
 
+type newProjectPageData struct {
+	CSRFToken string
+	Error     string
+}
+
+func (s *server) handleNewProjectPage(w http.ResponseWriter, r *http.Request) {
+	if !s.projectFeaturesReady(w) {
+		return
+	}
+	_, csrfToken, _ := s.currentSession(r)
+	s.render(w, http.StatusOK, "new_project.html", newProjectPageData{
+		CSRFToken: csrfToken,
+	})
+}
+
 func (s *server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	if !s.projectFeaturesReady(w) {
 		return

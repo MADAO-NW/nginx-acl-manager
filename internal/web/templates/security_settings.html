@@ -1,0 +1,614 @@
+{{define "security_settings.html"}}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>账号与安全设置 · Nginx ACL Manager</title>
+  {{template "styles" .}}
+  <style>
+    .security-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+      gap: 24px;
+    }
+    .qr-container {
+      background: #ffffff;
+      padding: 16px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-color);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin: 12px 0;
+      box-shadow: var(--shadow-sm);
+    }
+    .qr-container svg,
+    .qr-container img {
+      width: 180px;
+      height: 180px;
+      display: block;
+    }
+    .secret-box {
+      background: #f8fafc;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 8px 12px;
+      font-family: var(--font-mono);
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      color: var(--primary);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .step-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: var(--primary-light);
+      color: var(--primary);
+      font-weight: 700;
+      font-size: 12px;
+      margin-right: 6px;
+    }
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(15, 23, 42, 0.5);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      backdrop-filter: blur(2px);
+      padding: 20px;
+    }
+    .modal-overlay.active {
+      display: flex;
+    }
+    .modal-card {
+      background: #ffffff;
+      border-radius: var(--radius-lg);
+      max-width: 520px;
+      width: 100%;
+      box-shadow: var(--shadow-md);
+      overflow: hidden;
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .modal-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border-light);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .modal-body {
+      padding: 20px;
+      overflow-y: auto;
+    }
+    .modal-footer {
+      padding: 14px 20px;
+      background: #fafbfc;
+      border-top: 1px solid var(--border-light);
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="app-container">
+    {{template "sidebar_security" .}}
+
+    <div class="main-wrapper">
+      <header class="topbar">
+        <div class="breadcrumb">
+          <a href="/">📊 仪表盘概览</a>
+          <span class="breadcrumb-separator">/</span>
+          <span class="breadcrumb-current">🔒 账号与安全设置</span>
+        </div>
+        <div class="topbar-actions">
+          {{if .TwoFactorEnabled}}
+            <span class="badge badge-green">
+              <span class="status-dot green"></span> 2FA 双因素保护中
+            </span>
+          {{else}}
+            <span class="badge badge-gray">
+              <span class="status-dot gray"></span> 2FA 未启用
+            </span>
+          {{end}}
+        </div>
+      </header>
+
+      <main class="content-body">
+        <div style="margin-bottom: 24px;">
+          <h1>账号与系统安全配置</h1>
+          <p class="page-desc">管理管理员账号密码与 TOTP 双因素认证。任何安全认证变更生效后将自动销毁全部活跃会话并要求重新登录。</p>
+        </div>
+
+        <div id="global-alert" style="display: none;"></div>
+
+        <div class="security-grid">
+          <!-- 账号概览与修改密码卡片 -->
+          <div class="card" style="margin-bottom: 0;">
+            <div class="card-header">
+              <div class="card-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                修改管理员密码
+              </div>
+              <span class="badge badge-blue">当前账号: {{.Username}}</span>
+            </div>
+
+            <form id="form-password" onsubmit="handlePasswordChange(event)">
+              <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+              <div class="card-body">
+                <div id="password-alert" style="display: none;"></div>
+
+                <div class="form-group">
+                  <label for="pwd-current">当前密码</label>
+                  <input class="form-control" type="password" id="pwd-current" name="currentPassword" placeholder="请输入当前管理员密码" required>
+                </div>
+
+                <div class="form-group">
+                  <label for="pwd-new">
+                    <span>新密码</span>
+                    <span class="help-text">最低 6 位字符</span>
+                  </label>
+                  <input class="form-control" type="password" id="pwd-new" name="newPassword" minlength="6" placeholder="请输入新密码（至少 6 位）" required>
+                </div>
+
+                <div class="form-group" style="margin-bottom: 0;">
+                  <label for="pwd-confirm">确认新密码</label>
+                  <input class="form-control" type="password" id="pwd-confirm" name="confirmPassword" minlength="6" placeholder="请再次输入新密码" required>
+                </div>
+              </div>
+
+              <div class="card-footer" style="justify-content: space-between;">
+                <span style="font-size: 12px; color: var(--text-muted);">修改成功后将立即跳转登录页</span>
+                <button type="submit" id="btn-submit-pwd" class="btn btn-primary">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                  保存并更新密码
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <!-- 双因素认证 (2FA) 卡片 -->
+          <div class="card" style="margin-bottom: 0;">
+            <div class="card-header">
+              <div class="card-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                双因素认证 (TOTP 2FA)
+              </div>
+              {{if .TwoFactorEnabled}}
+                <span class="badge badge-green">已启用保护</span>
+              {{else}}
+                <span class="badge badge-gray">未启用</span>
+              {{end}}
+            </div>
+
+            <div class="card-body">
+              {{if .TwoFactorEnabled}}
+                <div style="background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: var(--radius-sm); padding: 16px; margin-bottom: 18px;">
+                  <div style="display: flex; align-items: center; gap: 8px; color: #065f46; font-weight: 600; font-size: 14px; margin-bottom: 6px;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                    双因素认证已处于生效保护状态
+                  </div>
+                  <p style="font-size: 13px; color: #047857; line-height: 1.5;">
+                    当前管理员登录已绑定 TOTP 认证器，登录时除密码外还需输入 6 位动态验证码。
+                  </p>
+                </div>
+
+                <div style="background: #f8fafc; border: 1px dashed var(--border-color); border-radius: var(--radius-sm); padding: 14px; margin-bottom: 20px;">
+                  <div style="font-size: 12.5px; font-weight: 600; color: var(--text-main); margin-bottom: 4px;">
+                    🛡️ 应急恢复提示
+                  </div>
+                  <p style="font-size: 12px; color: var(--text-muted); line-height: 1.5;">
+                    若认证设备遗失无法登录，可登录服务器宿主机执行命令强制停用：
+                  </p>
+                  <code style="display: block; margin-top: 6px; padding: 6px 8px; background: #ffffff;">sudo nginx-acl-manager admin disable-2fa</code>
+                </div>
+
+                <div style="text-align: right;">
+                  <button type="button" class="btn btn-danger" onclick="openDisableModal()">
+                    停用双因素认证
+                  </button>
+                </div>
+
+              {{else}}
+                <div style="background: #f0f9ff; border: 1px solid #bae6fd; border-radius: var(--radius-sm); padding: 16px; margin-bottom: 18px;">
+                  <div style="display: flex; align-items: center; gap: 8px; color: #0369a1; font-weight: 600; font-size: 14px; margin-bottom: 6px;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                    为什么推荐开启 2FA？
+                  </div>
+                  <p style="font-size: 13px; color: #0284c7; line-height: 1.5;">
+                    双因素认证（TOTP）为控制台提供第二层防护。即使登录密码意外泄露，攻击者仍无法跨过手机认证器中的 6 位动态验证码。
+                  </p>
+                </div>
+
+                <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 20px; line-height: 1.6;">
+                  支持 Google Authenticator、Microsoft Authenticator、1Password、Bitwarden 以及 Apple 钥匙串等所有标准 TOTP 认证器。
+                </p>
+
+                <div style="text-align: right;">
+                  <button type="button" class="btn btn-primary" onclick="openSetupModal()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    开启双因素认证 (2FA)
+                  </button>
+                </div>
+              {{end}}
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- 开启 2FA 模态框 (Setup Modal) -->
+  <div class="modal-overlay" id="modal-setup">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 style="margin:0; font-size:16px; font-weight:700;">开启双因素认证 (2FA)</h3>
+        <button type="button" class="logout-btn" onclick="closeModal('modal-setup')">&times;</button>
+      </div>
+
+      <!-- 步骤 1：验证当前密码 -->
+      <div class="modal-body" id="setup-step-1">
+        <p style="font-size: 13.5px; color: var(--text-muted); margin-bottom: 16px;">
+          为了保护账号安全，在生成认证密钥前，请输入当前的管理员登录密码：
+        </p>
+        <div id="setup-pwd-alert" style="display: none;"></div>
+        <div class="form-group" style="margin-bottom: 0;">
+          <label for="setup-current-pwd">管理员密码</label>
+          <input class="form-control" type="password" id="setup-current-pwd" placeholder="请输入当前登录密码" autofocus>
+        </div>
+      </div>
+
+      <div class="modal-footer" id="setup-step-1-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeModal('modal-setup')">取消</button>
+        <button type="button" id="btn-setup-step1" class="btn btn-primary" onclick="submitSetupStep1()">下一步 &rarr;</button>
+      </div>
+
+      <!-- 步骤 2：扫码与绑定校验 -->
+      <div class="modal-body" id="setup-step-2" style="display: none;">
+        <div id="setup-enable-alert" style="display: none;"></div>
+
+        <div style="margin-bottom: 14px;">
+          <span class="step-badge">1</span>
+          <strong style="font-size: 13.5px;">使用认证器扫描二维码：</strong>
+        </div>
+
+        <div style="text-align: center;">
+          <div class="qr-container" id="qrcode-box"></div>
+        </div>
+
+        <div style="margin: 12px 0;">
+          <label style="font-size: 12px; color: var(--text-muted);">无法扫码？可手动在 App 中输入此密钥：</label>
+          <div class="secret-box">
+            <span id="txt-secret-key">------</span>
+            <button type="button" class="copy-btn" onclick="copySecretKey(this)">复制密钥</button>
+          </div>
+        </div>
+
+        <div class="section-divider" style="margin: 16px 0;"></div>
+
+        <div style="margin-bottom: 10px;">
+          <span class="step-badge">2</span>
+          <strong style="font-size: 13.5px;">输入 App 生成的 6 位验证码以确认：</strong>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 0;">
+          <input class="form-control font-mono" id="setup-verify-code" pattern="[0-9]{6}" maxlength="6" inputmode="numeric" placeholder="输入 6 位动态验证码" style="font-size: 18px; text-align: center; letter-spacing: 4px;">
+        </div>
+      </div>
+
+      <div class="modal-footer" id="setup-step-2-footer" style="display: none;">
+        <button type="button" class="btn btn-secondary" onclick="closeModal('modal-setup')">取消</button>
+        <button type="button" id="btn-setup-step2" class="btn btn-primary" onclick="submitSetupStep2()">确认并启用 2FA</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 停用 2FA 模态框 (Disable Modal) -->
+  <div class="modal-overlay" id="modal-disable">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 style="margin:0; font-size:16px; font-weight:700; color:var(--danger);">停用双因素认证 (2FA)</h3>
+        <button type="button" class="logout-btn" onclick="closeModal('modal-disable')">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 13.5px; color: var(--text-muted); margin-bottom: 16px;">
+          停用 2FA 后，登录将仅依赖密码验证。请输入当前管理员密码与 6 位动态验证码确认操作：
+        </p>
+        <div id="disable-alert" style="display: none;"></div>
+
+        <div class="form-group">
+          <label for="disable-pwd">当前密码</label>
+          <input class="form-control" type="password" id="disable-pwd" placeholder="请输入当前登录密码" required>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 0;">
+          <label for="disable-code">6 位动态验证码</label>
+          <input class="form-control font-mono" id="disable-code" pattern="[0-9]{6}" maxlength="6" inputmode="numeric" placeholder="输入当前 6 位动态码" required style="font-size: 16px; text-align: center; letter-spacing: 3px;">
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeModal('modal-disable')">取消</button>
+        <button type="button" id="btn-disable-submit" class="btn btn-danger" onclick="submitDisable2FA()">确认停用 2FA</button>
+      </div>
+    </div>
+  </div>
+
+  {{template "scripts" .}}
+
+  <script>
+    var currentCSRF = {{.CSRFToken}};
+    var currentSecret = "";
+
+    function showAlert(containerId, message, type) {
+      var container = document.getElementById(containerId);
+      if (!container) return;
+      container.className = "alert alert-" + (type || "error");
+      container.innerHTML = '<div>' + escapeHTML(message) + '</div>';
+      container.style.display = "flex";
+    }
+
+    function hideAlert(containerId) {
+      var container = document.getElementById(containerId);
+      if (container) {
+        container.style.display = "none";
+      }
+    }
+
+    function escapeHTML(str) {
+      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function handleSuccessRedirect(msg) {
+      document.body.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f4f6fa;padding:20px;font-family:var(--font-sans);">
+          <div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;padding:36px;max-width:440px;text-align:center;box-shadow:0 10px 25px -5px rgba(0,0,0,0.06);">
+            <div style="width:48px;height:48px;border-radius:50%;background:#ecfdf5;color:#059669;display:flex;align-items:center;justify-content:center;font-size:24px;margin:0 auto 16px;">✓</div>
+            <h2 style="font-size:18px;font-weight:700;color:#0f172a;margin-bottom:8px;">` + escapeHTML(msg) + `</h2>
+            <p style="font-size:13.5px;color:#64748b;line-height:1.5;margin-bottom:20px;">系统已销毁全部登录会话并重启服务，正在为您跳转登录页面...</p>
+            <a href="/login" class="btn btn-primary" style="width:100%;">立即前往登录</a>
+          </div>
+        </div>
+      `;
+      setTimeout(function() {
+        window.location.href = '/login';
+      }, 1500);
+    }
+
+    // 1. 修改密码
+    function handlePasswordChange(e) {
+      e.preventDefault();
+      hideAlert('password-alert');
+      var form = e.target;
+      var cur = form.currentPassword.value;
+      var np = form.newPassword.value;
+      var cp = form.confirmPassword.value;
+
+      if (np.length < 6) {
+        showAlert('password-alert', '新密码长度至少需要 6 位');
+        return;
+      }
+      if (np !== cp) {
+        showAlert('password-alert', '两次输入的新密码不一致');
+        return;
+      }
+
+      var btn = document.getElementById('btn-submit-pwd');
+      btn.disabled = true;
+      btn.innerText = '正在保存...';
+
+      var data = new URLSearchParams();
+      data.append('csrf_token', currentCSRF);
+      data.append('currentPassword', cur);
+      data.append('newPassword', np);
+      data.append('confirmPassword', cp);
+
+      fetch('/api/security/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: data.toString()
+      }).then(function(res) {
+        return res.json().then(function(json) {
+          if (res.status === 202) {
+            handleSuccessRedirect('密码修改成功！');
+          } else {
+            showAlert('password-alert', json.error || '修改密码失败 (' + res.status + ')');
+            btn.disabled = false;
+            btn.innerText = '保存并更新密码';
+          }
+        });
+      }).catch(function(err) {
+        showAlert('password-alert', '网络连接异常或服务未响应');
+        btn.disabled = false;
+        btn.innerText = '保存并更新密码';
+      });
+    }
+
+    // 2. 开启 2FA
+    function openSetupModal() {
+      hideAlert('setup-pwd-alert');
+      hideAlert('setup-enable-alert');
+      document.getElementById('setup-current-pwd').value = '';
+      document.getElementById('setup-verify-code').value = '';
+      document.getElementById('setup-step-1').style.display = 'block';
+      document.getElementById('setup-step-1-footer').style.display = 'flex';
+      document.getElementById('setup-step-2').style.display = 'none';
+      document.getElementById('setup-step-2-footer').style.display = 'none';
+      document.getElementById('modal-setup').classList.add('active');
+    }
+
+    function closeModal(id) {
+      document.getElementById(id).classList.remove('active');
+    }
+
+    function submitSetupStep1() {
+      hideAlert('setup-pwd-alert');
+      var pwd = document.getElementById('setup-current-pwd').value;
+      if (!pwd) {
+        showAlert('setup-pwd-alert', '请输入当前登录密码');
+        return;
+      }
+
+      var btn = document.getElementById('btn-setup-step1');
+      btn.disabled = true;
+      btn.innerText = '验证中...';
+
+      var data = new URLSearchParams();
+      data.append('csrf_token', currentCSRF);
+      data.append('currentPassword', pwd);
+
+      fetch('/api/security/2fa/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: data.toString()
+      }).then(function(res) {
+        return res.json().then(function(json) {
+          btn.disabled = false;
+          btn.innerText = '下一步 →';
+          if (res.status === 200) {
+            currentSecret = json.secret;
+            document.getElementById('txt-secret-key').innerText = json.secret;
+            renderQRCode(document.getElementById('qrcode-box'), json.qrCodeDataUrl);
+            document.getElementById('setup-step-1').style.display = 'none';
+            document.getElementById('setup-step-1-footer').style.display = 'none';
+            document.getElementById('setup-step-2').style.display = 'block';
+            document.getElementById('setup-step-2-footer').style.display = 'flex';
+            document.getElementById('setup-verify-code').focus();
+          } else {
+            showAlert('setup-pwd-alert', json.error || '初始化 2FA 失败 (' + res.status + ')');
+          }
+        });
+      }).catch(function(err) {
+        btn.disabled = false;
+        btn.innerText = '下一步 →';
+        showAlert('setup-pwd-alert', '网络连接异常');
+      });
+    }
+
+    function submitSetupStep2() {
+      hideAlert('setup-enable-alert');
+      var code = document.getElementById('setup-verify-code').value.trim();
+      if (code.length !== 6) {
+        showAlert('setup-enable-alert', '请输入完整的 6 位动态验证码');
+        return;
+      }
+
+      var btn = document.getElementById('btn-setup-step2');
+      btn.disabled = true;
+      btn.innerText = '正在启用...';
+
+      var data = new URLSearchParams();
+      data.append('csrf_token', currentCSRF);
+      data.append('code', code);
+
+      fetch('/api/security/2fa/enable', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: data.toString()
+      }).then(function(res) {
+        return res.json().then(function(json) {
+          if (res.status === 202) {
+            handleSuccessRedirect('双因素认证 (2FA) 启用成功！');
+          } else {
+            showAlert('setup-enable-alert', json.error || '启用 2FA 失败 (' + res.status + ')');
+            btn.disabled = false;
+            btn.innerText = '确认并启用 2FA';
+          }
+        });
+      }).catch(function(err) {
+        btn.disabled = false;
+        btn.innerText = '确认并启用 2FA';
+        showAlert('setup-enable-alert', '网络连接异常');
+      });
+    }
+
+    function copySecretKey(btn) {
+      if (!currentSecret) return;
+      copyToClipboard(currentSecret, btn);
+    }
+
+    // 3. 停用 2FA
+    function openDisableModal() {
+      hideAlert('disable-alert');
+      document.getElementById('disable-pwd').value = '';
+      document.getElementById('disable-code').value = '';
+      document.getElementById('modal-disable').classList.add('active');
+    }
+
+    function submitDisable2FA() {
+      hideAlert('disable-alert');
+      var pwd = document.getElementById('disable-pwd').value;
+      var code = document.getElementById('disable-code').value.trim();
+      if (!pwd) {
+        showAlert('disable-alert', '请输入当前密码');
+        return;
+      }
+      if (code.length !== 6) {
+        showAlert('disable-alert', '请输入 6 位动态验证码');
+        return;
+      }
+
+      var btn = document.getElementById('btn-disable-submit');
+      btn.disabled = true;
+      btn.innerText = '正在停用...';
+
+      var data = new URLSearchParams();
+      data.append('csrf_token', currentCSRF);
+      data.append('currentPassword', pwd);
+      data.append('code', code);
+
+      fetch('/api/security/2fa/disable', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: data.toString()
+      }).then(function(res) {
+        return res.json().then(function(json) {
+          if (res.status === 202) {
+            handleSuccessRedirect('双因素认证已停用！');
+          } else {
+            showAlert('disable-alert', json.error || '停用 2FA 失败 (' + res.status + ')');
+            btn.disabled = false;
+            btn.innerText = '确认停用 2FA';
+          }
+        });
+      }).catch(function(err) {
+        btn.disabled = false;
+        btn.innerText = '确认停用 2FA';
+        showAlert('disable-alert', '网络连接异常');
+      });
+    }
+
+    function renderQRCode(container, dataURL) {
+      container.innerHTML = '';
+      if (!dataURL || !dataURL.startsWith('data:image/png;base64,')) {
+        container.innerHTML = '<div style="color:red;font-size:12px;">生成二维码失败</div>';
+        return;
+      }
+      var image = document.createElement('img');
+      image.src = dataURL;
+      image.alt = 'TOTP 配置二维码';
+      image.width = 180;
+      image.height = 180;
+      container.appendChild(image);
+    }
+  </script>
+</body>
+</html>
+{{end}}

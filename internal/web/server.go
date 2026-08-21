@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"nginx-acl-manager/internal/auth"
 	"nginx-acl-manager/internal/draft"
@@ -34,6 +35,14 @@ type CredentialVerifier interface {
 	Verify(username, password string) bool
 }
 
+// SecurityCredentialProvider 提供安全设置和 TOTP 登录所需的只读正式凭据视图。
+type SecurityCredentialProvider interface {
+	CredentialVerifier
+	Username() string
+	TOTPSecret() string
+	Fingerprint() string
+}
+
 // ProfileRepository 提供 Web 所需的候选写入和正式 Profile 只读能力。
 type ProfileRepository interface {
 	LoadCandidate() (nginxprofile.Profile, error)
@@ -48,39 +57,55 @@ type ApplyTrigger interface {
 
 // Options 定义 Web 处理器的必要依赖。
 type Options struct {
-	Verifier          CredentialVerifier
-	Sessions          *auth.SessionStore
-	Profiles          ProfileRepository
-	ApplyTrigger      ApplyTrigger
-	PublishTrigger    ApplyTrigger
-	Drafts            draft.Store
-	Releases          release.Store
-	ProfileResultPath string
-	DefaultCandidate  nginxprofile.Profile
-	SecureCookies     bool
-	Logger            *slog.Logger
+	Verifier            CredentialVerifier
+	Sessions            *auth.SessionStore
+	Profiles            ProfileRepository
+	ApplyTrigger        ApplyTrigger
+	PublishTrigger      ApplyTrigger
+	Drafts              draft.Store
+	Releases            release.Store
+	ProfileResultPath   string
+	DefaultCandidate    nginxprofile.Profile
+	SecureCookies       bool
+	Logger              *slog.Logger
+	SecurityCredentials SecurityCredentialProvider
+	AuthChangeTrigger   ApplyTrigger
+	AuthCandidatePath   string
+	TOTPState           *auth.TOTPStateStore
+	LoginLimiter        *auth.LoginLimiter
+	Sleep               func(time.Duration)
 }
 
 type server struct {
-	verifier          CredentialVerifier
-	sessions          *auth.SessionStore
-	profiles          ProfileRepository
-	applyTrigger      ApplyTrigger
-	publishTrigger    ApplyTrigger
-	drafts            draft.Store
-	releases          release.Store
-	profileResultPath string
-	defaultCandidate  nginxprofile.Profile
-	secureCookies     bool
-	logger            *slog.Logger
-	templates         *template.Template
-	mux               *http.ServeMux
-	publishMu         sync.Mutex
+	verifier            CredentialVerifier
+	sessions            *auth.SessionStore
+	profiles            ProfileRepository
+	applyTrigger        ApplyTrigger
+	publishTrigger      ApplyTrigger
+	drafts              draft.Store
+	releases            release.Store
+	profileResultPath   string
+	defaultCandidate    nginxprofile.Profile
+	secureCookies       bool
+	logger              *slog.Logger
+	templates           *template.Template
+	mux                 *http.ServeMux
+	publishMu           sync.Mutex
+	securityCredentials SecurityCredentialProvider
+	authChangeTrigger   ApplyTrigger
+	authCandidatePath   string
+	totpState           *auth.TOTPStateStore
+	loginLimiter        *auth.LoginLimiter
+	sleep               func(time.Duration)
+	authChangeMu        sync.Mutex
+	pendingTOTPMu       sync.Mutex
+	pendingTOTP         map[string]string
 }
 
 type loginPageData struct {
-	CSRFToken string
-	Error     string
+	CSRFToken         string
+	Error             string
+	TwoFactorRequired bool
 }
 
 type homePageData struct {
@@ -107,7 +132,34 @@ func NewHandler(options Options) (http.Handler, error) {
 		return nil, errors.New("Web 处理器依赖不完整")
 	}
 
-	templates, err := template.New("").Funcs(template.FuncMap{"hasMethod": methodChecked}).ParseFS(templateFiles, "templates/*.html")
+	templates, err := template.New("").Funcs(template.FuncMap{
+		"hasMethod": methodChecked,
+		"totalInstances": func(projects []model.Project) int {
+			n := 0
+			for _, p := range projects {
+				n += len(p.Instances)
+			}
+			return n
+		},
+		"totalRules": func(projects []model.Project) int {
+			n := 0
+			for _, p := range projects {
+				for _, inst := range p.Instances {
+					n += len(inst.Rules)
+				}
+			}
+			return n
+		},
+		"totalAllowlist": func(projects []model.Project) int {
+			n := 0
+			for _, p := range projects {
+				for _, inst := range p.Instances {
+					n += len(inst.AllowedCIDRs)
+				}
+			}
+			return n
+		},
+	}).ParseFS(templateFiles, "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
@@ -117,29 +169,57 @@ func NewHandler(options Options) (http.Handler, error) {
 	}
 
 	s := &server{
-		verifier:          options.Verifier,
-		sessions:          options.Sessions,
-		profiles:          options.Profiles,
-		applyTrigger:      options.ApplyTrigger,
-		publishTrigger:    options.PublishTrigger,
-		drafts:            options.Drafts,
-		releases:          options.Releases,
-		profileResultPath: options.ProfileResultPath,
-		defaultCandidate:  options.DefaultCandidate,
-		secureCookies:     options.SecureCookies,
-		logger:            logger,
-		templates:         templates,
-		mux:               http.NewServeMux(),
+		verifier:            options.Verifier,
+		sessions:            options.Sessions,
+		profiles:            options.Profiles,
+		applyTrigger:        options.ApplyTrigger,
+		publishTrigger:      options.PublishTrigger,
+		drafts:              options.Drafts,
+		releases:            options.Releases,
+		profileResultPath:   options.ProfileResultPath,
+		defaultCandidate:    options.DefaultCandidate,
+		secureCookies:       options.SecureCookies,
+		logger:              logger,
+		templates:           templates,
+		mux:                 http.NewServeMux(),
+		securityCredentials: options.SecurityCredentials,
+		authChangeTrigger:   options.AuthChangeTrigger,
+		authCandidatePath:   options.AuthCandidatePath,
+		totpState:           options.TOTPState,
+		loginLimiter:        options.LoginLimiter,
+		sleep:               options.Sleep,
+		pendingTOTP:         make(map[string]string),
+	}
+	if s.securityCredentials == nil {
+		if provider, ok := options.Verifier.(SecurityCredentialProvider); ok {
+			s.securityCredentials = provider
+		}
+	}
+	if s.loginLimiter == nil {
+		s.loginLimiter = auth.NewLoginLimiter()
+	}
+	if s.sleep == nil {
+		s.sleep = time.Sleep
 	}
 
 	s.mux.HandleFunc("GET /login", s.handleLoginPage)
 	s.mux.HandleFunc("POST /login", s.handleLogin)
+	s.mux.HandleFunc("GET /login/2fa", s.handleLoginTOTPPage)
+	s.mux.HandleFunc("POST /login/2fa", s.handleLoginTOTP)
+	s.mux.HandleFunc("POST /login/2fa/cancel", s.handleCancelLoginTOTP)
 	s.mux.HandleFunc("POST /logout", s.requireSession(true, s.handleLogout))
+	s.mux.HandleFunc("GET /api/security", s.requireSession(false, s.handleSecurityStatus))
+	s.mux.HandleFunc("POST /api/security/password", s.requireSession(true, s.handleChangePassword))
+	s.mux.HandleFunc("POST /api/security/2fa/setup", s.requireSession(true, s.handleSetupTOTP))
+	s.mux.HandleFunc("POST /api/security/2fa/enable", s.requireSession(true, s.handleEnableTOTP))
+	s.mux.HandleFunc("POST /api/security/2fa/disable", s.requireSession(true, s.handleDisableTOTP))
+	s.mux.HandleFunc("GET /settings/security", s.requireSession(false, s.handleSecuritySettingsPage))
 	s.mux.HandleFunc("GET /{$}", s.requireSession(false, s.handleHome))
 	s.mux.HandleFunc("GET /settings/nginx", s.requireSession(false, s.handleNginxSettings))
 	s.mux.HandleFunc("POST /settings/nginx", s.requireSession(true, s.handleSaveNginxSettings))
 	s.mux.HandleFunc("POST /settings/nginx/apply", s.requireSession(true, s.handleApplyNginxSettings))
 	if s.drafts.Directory != "" && s.releases.AccessControlRoot != "" {
+		s.mux.HandleFunc("GET /projects/new", s.requireSession(false, s.handleNewProjectPage))
 		s.mux.HandleFunc("POST /projects", s.requireSession(true, s.handleCreateProject))
 		s.mux.HandleFunc("GET /projects/{slug}", s.requireSession(false, s.handleProject))
 		s.mux.HandleFunc("POST /projects/{slug}", s.requireSession(true, s.handleUpdateProject))
@@ -159,7 +239,7 @@ func NewHandler(options Options) (http.Handler, error) {
 
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	s.mux.ServeHTTP(w, r)
@@ -168,6 +248,10 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	if _, _, ok := s.currentSession(r); ok {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	if _, _, ok := s.pendingSession(r); ok {
+		http.Redirect(w, r, "/login/2fa", http.StatusSeeOther)
 		return
 	}
 	token, err := newToken()
@@ -187,11 +271,26 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rateKey := loginRateKey(r, r.FormValue("username"), "password")
 	if !s.verifier.Verify(r.FormValue("username"), r.FormValue("password")) {
+		s.sleep(s.loginLimiter.Failure(rateKey))
 		s.render(w, http.StatusUnauthorized, "login.html", loginPageData{
 			CSRFToken: cookie.Value,
 			Error:     "用户名或密码错误",
 		})
+		return
+	}
+	s.loginLimiter.Success(rateKey)
+	if s.securityCredentials != nil && s.securityCredentials.TOTPSecret() != "" {
+		sessionID, _, err := s.sessions.CreatePending()
+		if err != nil {
+			s.logger.Error("创建 TOTP 临时 Session 失败", "error", err)
+			http.Error(w, "暂时无法登录", http.StatusInternalServerError)
+			return
+		}
+		s.setCookie(w, sessionCookieName, sessionID, true)
+		s.deleteCookie(w, loginCSRFCookieName, true)
+		http.Redirect(w, r, "/login/2fa", http.StatusSeeOther)
 		return
 	}
 
@@ -342,6 +441,15 @@ func (s *server) currentSession(r *http.Request) (string, string, bool) {
 		return "", "", false
 	}
 	csrfToken, ok := s.sessions.Get(cookie.Value)
+	return cookie.Value, csrfToken, ok
+}
+
+func (s *server) pendingSession(r *http.Request) (string, string, bool) {
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		return "", "", false
+	}
+	csrfToken, ok := s.sessions.GetPending(cookie.Value)
 	return cookie.Value, csrfToken, ok
 }
 

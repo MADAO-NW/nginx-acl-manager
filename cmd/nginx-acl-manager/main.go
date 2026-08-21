@@ -9,6 +9,8 @@ import (
 const (
 	defaultConfigPath           = "/etc/nginx-acl-manager/config.json"
 	defaultCredentialsPath      = "/etc/nginx-acl-manager/auth.json"
+	defaultAuthCandidatePath    = "/var/lib/nginx-acl-manager/staging/auth-candidate.json"
+	defaultTOTPStatePath        = "/var/lib/nginx-acl-manager/auth/totp-state.json"
 	defaultCandidateProfilePath = "/var/lib/nginx-acl-manager/staging/nginx-profile-candidate.json"
 	defaultActiveProfilePath    = "/etc/nginx-acl-manager/nginx-profile.json"
 	defaultDraftDirectory       = "/var/lib/nginx-acl-manager/drafts/projects"
@@ -25,6 +27,7 @@ const (
 	defaultSystemdRoot          = "/etc/systemd/system"
 	profileApplyUnitName        = "nginx-acl-manager-profile-apply.service"
 	publishUnitName             = "nginx-acl-manager-publish.service"
+	authApplyUnitName           = "nginx-acl-manager-auth-apply.service"
 	serviceName                 = "nginx-acl-manager.service"
 )
 
@@ -51,12 +54,11 @@ func run(args []string) error {
 		fmt.Println(version)
 		return nil
 	case "serve":
-		if len(args) != 1 {
-			return errors.New("serve 命令不接收参数")
-		}
-		return runServe()
+		return runServe(args[1:])
 	case "admin":
 		return runAdmin(args[1:])
+	case "auth":
+		return runAuth(args[1:])
 	case "config":
 		return runConfig(args[1:])
 	case "profile":
@@ -81,11 +83,13 @@ func run(args []string) error {
 
 func usageText() string {
 	return `用法:
-  nginx-acl-manager serve
+  nginx-acl-manager serve [--local-dir ABSOLUTE_PATH]
   nginx-acl-manager admin init [--output PATH]
   nginx-acl-manager admin set-username [--output PATH]
   nginx-acl-manager admin set-password [--output PATH]
   nginx-acl-manager admin reset [--output PATH]
+  nginx-acl-manager admin disable-2fa [--output PATH]
+  nginx-acl-manager auth apply-candidate
   nginx-acl-manager config init [--output PATH] [--port PORT]
   nginx-acl-manager config set-port --port PORT [--output PATH]
   nginx-acl-manager profile seed-candidate [参数]

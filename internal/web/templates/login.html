@@ -4,26 +4,189 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>登录 · Nginx ACL Manager</title>
+  <title>{{if .TwoFactorRequired}}双因素认证{{else}}管理员登录{{end}} · Nginx ACL Manager</title>
+  {{template "styles" .}}
   <style>
-    body { max-width: 28rem; margin: 5rem auto; padding: 0 1rem; font: 16px/1.5 system-ui, sans-serif; }
-    label { display: block; margin-top: 1rem; }
-    input { box-sizing: border-box; width: 100%; padding: .65rem; }
-    button { margin-top: 1.25rem; padding: .65rem 1rem; }
-    .error { color: #b42318; }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      background: radial-gradient(circle at 50% 25%, #eff6ff 0%, #f4f6fa 60%, #e2e8f0 100%);
+      padding: 24px 16px;
+    }
+    .login-container {
+      width: 100%;
+      max-width: 400px;
+    }
+    .login-card {
+      background: #ffffff;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.06), 0 8px 10px -6px rgba(0, 0, 0, 0.03);
+      padding: 36px 30px;
+    }
+    .login-header {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+    .login-logo {
+      width: 48px;
+      height: 48px;
+      margin: 0 auto 14px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #2563eb, #3b82f6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-size: 24px;
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.35);
+    }
+    .login-logo.totp {
+      background: linear-gradient(135deg, #059669, #10b981);
+      box-shadow: 0 4px 12px rgba(5, 150, 105, 0.35);
+    }
+    .login-title {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+    .login-subtitle {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .input-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .input-icon {
+      position: absolute;
+      left: 12px;
+      color: var(--text-subtle);
+      pointer-events: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2;
+    }
+    .login-input {
+      padding-left: 38px !important;
+      height: 42px !important;
+      font-size: 14px !important;
+      border-radius: 8px !important;
+    }
+    .code-input {
+      height: 48px !important;
+      font-size: 22px !important;
+      font-weight: 700 !important;
+      letter-spacing: 6px !important;
+      text-align: center !important;
+      border-radius: 8px !important;
+      font-family: var(--font-mono) !important;
+    }
+    .login-btn {
+      height: 42px !important;
+      font-size: 14.5px !important;
+      font-weight: 600 !important;
+      border-radius: 8px !important;
+      width: 100%;
+      margin-top: 8px;
+    }
   </style>
 </head>
 <body>
-  <main>
-    <h1>管理员登录</h1>
-    {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
-    <form method="post" action="/login">
-      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-      <label>用户名<input name="username" autocomplete="username" required></label>
-      <label>密码<input type="password" name="password" autocomplete="current-password" required></label>
-      <button type="submit">登录</button>
-    </form>
-  </main>
+  <div class="login-container">
+    <div class="login-card">
+      {{if .TwoFactorRequired}}
+        <!-- 阶段二：2FA 动态验证码输入 -->
+        <div class="login-header">
+          <div class="login-logo totp">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>
+          </div>
+          <h1 class="login-title">双因素身份验证</h1>
+          <p class="login-subtitle">请输入认证器 App 生成的 6 位动态验证码</p>
+        </div>
+
+        {{if .Error}}
+          <div class="alert alert-error" role="alert" style="margin-bottom: 20px;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <div>{{.Error}}</div>
+          </div>
+        {{end}}
+
+        <form method="post" action="/login/2fa" autocomplete="off">
+          <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+          <div class="form-group" style="margin-bottom: 20px;">
+            <label for="totp-code" style="justify-content: center; margin-bottom: 8px;">6 位 TOTP 动态码</label>
+            <input class="form-control code-input" id="totp-code" name="code" pattern="[0-9]{6}" maxlength="6" inputmode="numeric" autocomplete="one-time-code" placeholder="------" required autofocus>
+          </div>
+
+          <button type="submit" class="btn btn-primary login-btn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+            验证并进入控制台
+          </button>
+        </form>
+
+        <form method="post" action="/login/2fa/cancel" style="margin-top: 12px;">
+          <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+          <button type="submit" class="btn btn-secondary" style="width: 100%; height: 38px; border-radius: 8px; font-size: 13.5px;">
+            &larr; 取消并返回密码登录
+          </button>
+        </form>
+
+      {{else}}
+        <!-- 阶段一：用户名与密码登录 -->
+        <div class="login-header">
+          <div class="login-logo">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          </div>
+          <h1 class="login-title">管理员登录</h1>
+          <p class="login-subtitle">Nginx ACL Manager 安全控制台</p>
+        </div>
+
+        {{if .Error}}
+          <div class="alert alert-error" role="alert" style="margin-bottom: 20px;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <div>{{.Error}}</div>
+          </div>
+        {{end}}
+
+        <form method="post" action="/login" autocomplete="on">
+          <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+          <div class="form-group">
+            <label for="username">管理员用户名</label>
+            <div class="input-wrapper">
+              <span class="input-icon">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              </span>
+              <input class="form-control login-input" id="username" name="username" autocomplete="username" placeholder="请输入管理员用户名" required autofocus>
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-bottom: 24px;">
+            <label for="password">
+              <span>密码</span>
+              <span class="help-text">最低 6 位</span>
+            </label>
+            <div class="input-wrapper">
+              <span class="input-icon">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              </span>
+              <input class="form-control login-input" type="password" id="password" name="password" autocomplete="current-password" placeholder="请输入密码" required>
+            </div>
+          </div>
+
+          <button type="submit" class="btn btn-primary login-btn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+            登录
+          </button>
+        </form>
+      {{end}}
+    </div>
+  </div>
 </body>
 </html>
 {{end}}
